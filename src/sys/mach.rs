@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::os::raw::{c_char, c_int, c_uint, c_void};
+use std::os::raw::{c_char, c_int, c_uint};
 
 pub type MachPort = c_uint;
 pub type KernReturn = c_int;
@@ -9,7 +9,6 @@ pub type MachMsgSize = c_uint;
 pub type MachMsgId = c_int;
 pub type IpcSpace = MachPort;
 pub type MachMsgTypeName = c_uint;
-pub type MachMsgCopyOptions = c_uint;
 
 pub const KERN_SUCCESS: KernReturn = 0;
 pub const MACH_PORT_NULL: MachPort = 0;
@@ -30,7 +29,7 @@ pub const MACH_PORT_QLIMIT_LARGE: c_uint = 1024;
 pub const MACH_PORT_LIMITS_INFO: c_int = 1;
 pub const MACH_PORT_LIMITS_INFO_COUNT: c_uint = 1;
 pub const MACH_MSG_OOL_DESCRIPTOR: u8 = 0x01;
-pub const MACH_MSG_VIRTUAL_COPY: MachMsgCopyOptions = 1;
+pub const MACH_MSG_VIRTUAL_COPY: u8 = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -43,26 +42,15 @@ pub struct MachMsgHeader {
     pub msgh_id: MachMsgId,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
+#[repr(C, packed(4))]
+#[derive(Clone, Copy, Default)]
 pub struct MachMsgOolDescriptor {
-    pub address: *mut c_void,
-    pub deallocate: bool,
-    pub copy: MachMsgCopyOptions,
-    pub size: MachMsgSize,
+    pub address: usize,
+    pub deallocate: u8,
+    pub copy: u8,
+    pub pad1: u8,
     pub descriptor_type: u8,
-}
-
-impl Default for MachMsgOolDescriptor {
-    fn default() -> Self {
-        Self {
-            address: std::ptr::null_mut(),
-            deallocate: false,
-            copy: 0,
-            size: 0,
-            descriptor_type: 0,
-        }
-    }
+    pub size: MachMsgSize,
 }
 
 #[repr(C)]
@@ -155,4 +143,30 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn mig_get_special_reply_port() -> MachPort;
     pub fn mig_dealloc_special_reply_port(port: MachPort) -> MachPort;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mach_message_layout_matches_macos_64_bit_abi() {
+        assert_eq!(std::mem::size_of::<MachMsgHeader>(), 24);
+        assert_eq!(std::mem::offset_of!(MachMsgHeader, msgh_size), 4);
+        assert_eq!(std::mem::offset_of!(MachMsgHeader, msgh_id), 20);
+
+        assert_eq!(std::mem::size_of::<MachMsgOolDescriptor>(), 16);
+        assert_eq!(std::mem::align_of::<MachMsgOolDescriptor>(), 4);
+        assert_eq!(std::mem::offset_of!(MachMsgOolDescriptor, address), 0);
+        assert_eq!(std::mem::offset_of!(MachMsgOolDescriptor, deallocate), 8);
+        assert_eq!(std::mem::offset_of!(MachMsgOolDescriptor, copy), 9);
+        assert_eq!(std::mem::offset_of!(MachMsgOolDescriptor, pad1), 10);
+        assert_eq!(
+            std::mem::offset_of!(MachMsgOolDescriptor, descriptor_type),
+            11
+        );
+        assert_eq!(std::mem::offset_of!(MachMsgOolDescriptor, size), 12);
+
+        assert_eq!(std::mem::size_of::<NdrRecord>(), 8);
+    }
 }

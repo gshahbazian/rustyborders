@@ -117,7 +117,9 @@ unsafe extern "C" fn notify_callback(
     _data_length: usize,
     context: *mut std::ffi::c_void,
 ) {
-    let cid = context as isize as i32;
+    let Ok(cid) = i32::try_from(context as isize) else {
+        return;
+    };
     match event {
         EVENT_WINDOW_CREATE | EVENT_WINDOW_DESTROY => {
             if data.is_null() {

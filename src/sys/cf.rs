@@ -88,7 +88,6 @@ unsafe extern "C" {
         the_type: i32,
         value_ptr: *const c_void,
     ) -> CFNumberRef;
-    pub fn CFNumberGetType(number: CFNumberRef) -> i32;
     pub fn CFNumberGetValue(number: CFNumberRef, the_type: i32, value_ptr: *mut c_void) -> Boolean;
     pub fn CFStringCreateWithCString(
         allocator: CFAllocatorRef,

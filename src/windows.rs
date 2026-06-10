@@ -4,8 +4,8 @@ use std::ptr;
 use crate::border::Border;
 use crate::settings::Settings;
 use crate::sys::cf::{
-    CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryGetValue, CFNumberGetType,
-    CFNumberGetValue, CFTypeRef, OwnedCf, cf_string, cfarray_of_u32, cfarray_of_u64,
+    CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryGetValue, CFNumberGetValue, CFTypeRef,
+    K_CF_NUMBER_SINT64_TYPE, OwnedCf, cf_string, cfarray_of_u32, cfarray_of_u64,
 };
 use crate::sys::geometry::{SpaceId, WindowId};
 use crate::sys::mach::{
@@ -140,6 +140,9 @@ pub fn window_sub_level(server_port: crate::sys::mach::MachPort, wid: WindowId) 
     if server_port == 0 {
         return 0;
     }
+    let Ok(wid) = i32::try_from(wid.0) else {
+        return 0;
+    };
 
     let request = 0x73c3;
     let response = 0x7427;
@@ -173,7 +176,7 @@ pub fn window_sub_level(server_port: crate::sys::mach::MachPort, wid: WindowId) 
             header: MachMsgHeader::default(),
             ndr_record: NDR_RECORD,
         },
-        payload: Payload { wid: wid.0 as i32 },
+        payload: Payload { wid },
         response: Response {
             sub_level: 0,
             padding: 0,
@@ -189,6 +192,11 @@ pub fn window_sub_level(server_port: crate::sys::mach::MachPort, wid: WindowId) 
         crate::sys::mach::MACH_MSGH_BITS_REMOTE_MASK,
     );
     message.info.header.msgh_id = request;
+    let send_size =
+        u32::try_from(std::mem::size_of::<MessageInfo>() + std::mem::size_of::<Payload>())
+            .expect("sublevel request message fits in mach_msg_size_t");
+    let receive_size = u32::try_from(std::mem::size_of::<Message>())
+        .expect("sublevel response message fits in mach_msg_size_t");
 
     let error = unsafe {
         mach_msg(
@@ -198,8 +206,8 @@ pub fn window_sub_level(server_port: crate::sys::mach::MachPort, wid: WindowId) 
                 | MACH_SEND_PROPAGATE_QOS
                 | MACH_RCV_MSG
                 | MACH_RCV_SYNC_WAIT,
-            (std::mem::size_of::<MessageInfo>() + std::mem::size_of::<Payload>()) as u32,
-            std::mem::size_of::<Message>() as u32,
+            send_size,
+            receive_size,
             message.info.header.msgh_local_port,
             MACH_MSG_TIMEOUT_NONE,
             MACH_PORT_NULL,
@@ -256,7 +264,7 @@ pub fn window_space_id(cid: i32, wid: WindowId) -> SpaceId {
             unsafe {
                 CFNumberGetValue(
                     id_ref,
-                    CFNumberGetType(id_ref),
+                    K_CF_NUMBER_SINT64_TYPE,
                     std::ptr::addr_of_mut!(sid).cast(),
                 );
             }
@@ -337,6 +345,9 @@ pub fn get_front_window(cid: i32) -> WindowId {
     unsafe {
         SLSGetConnectionIDForPSN(cid, &mut psn, &mut target_cid);
     }
+    let Ok(target_cid) = u32::try_from(target_cid) else {
+        return WindowId(0);
+    };
 
     let Some(space_list) = cfarray_of_u64(&[active_sid.0]) else {
         return WindowId(0);
@@ -347,7 +358,7 @@ pub fn get_front_window(cid: i32) -> WindowId {
     let window_list = unsafe {
         SLSCopyWindowsWithOptionsAndTags(
             cid,
-            target_cid as u32,
+            target_cid,
             space_list.as_raw(),
             0x2,
             &mut set_tags,
@@ -487,7 +498,7 @@ pub fn copy_all_space_ids(cid: i32) -> Vec<SpaceId> {
             unsafe {
                 CFNumberGetValue(
                     sid_ref,
-                    CFNumberGetType(sid_ref),
+                    K_CF_NUMBER_SINT64_TYPE,
                     std::ptr::addr_of_mut!(sid).cast(),
                 );
             }
@@ -646,11 +657,14 @@ pub fn create_window_border(
 
 pub fn update_notifications(windows: &std::collections::HashMap<WindowId, Border>) {
     let mut window_list = windows.keys().map(|wid| wid.0).collect::<Vec<_>>();
+    let Ok(window_count) = i32::try_from(window_list.len()) else {
+        return;
+    };
     unsafe {
         SLSRequestNotificationsForWindows(
             SLSMainConnectionID(),
             window_list.as_mut_ptr(),
-            window_list.len() as i32,
+            window_count,
         );
     }
 }

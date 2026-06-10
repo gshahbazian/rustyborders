@@ -87,6 +87,13 @@ pub fn parse_message_settings(
 }
 
 fn send_message(port: MachPort, bytes: &[u8]) {
+    let Ok(message_size) = u32::try_from(std::mem::size_of::<MachMessage>()) else {
+        return;
+    };
+    let Ok(bytes_len) = u32::try_from(bytes.len()) else {
+        return;
+    };
+
     let mut msg = MachMessage::default();
     msg.header.msgh_remote_port = port;
     msg.header.msgh_bits = mach_msg_bits(
@@ -95,24 +102,29 @@ fn send_message(port: MachPort, bytes: &[u8]) {
         0,
         MACH_MSGH_BITS_COMPLEX,
     );
-    msg.header.msgh_size = std::mem::size_of::<MachMessage>() as u32;
+    msg.header.msgh_size = message_size;
     msg.descriptor_count = 1;
-    msg.descriptor.address = bytes.as_ptr().cast_mut().cast();
-    msg.descriptor.size = bytes.len() as u32;
+    msg.descriptor.address = bytes.as_ptr() as usize;
+    msg.descriptor.size = bytes_len;
     msg.descriptor.copy = MACH_MSG_VIRTUAL_COPY;
-    msg.descriptor.deallocate = false;
+    msg.descriptor.deallocate = 0;
     msg.descriptor.descriptor_type = MACH_MSG_OOL_DESCRIPTOR;
 
-    unsafe {
+    let result = unsafe {
         mach_msg(
             &mut msg.header,
             MACH_SEND_MSG,
-            std::mem::size_of::<MachMessage>() as u32,
+            message_size,
             0,
             MACH_PORT_NULL,
             MACH_MSG_TIMEOUT_NONE,
             MACH_PORT_NULL,
-        );
+        )
+    };
+    if result != KERN_SUCCESS {
+        crate::rb_log!("failed to send ipc message err={result}");
+    } else {
+        crate::rb_log!("sent ipc message bytes={bytes_len}");
     }
 }
 
@@ -213,8 +225,22 @@ unsafe extern "C" fn mach_message_callback(
         return;
     }
     let descriptor = unsafe { &(*message).descriptor };
-    crate::app::handle_ipc_message(descriptor.address.cast::<u8>(), descriptor.size as usize);
+    crate::rb_log!("received ipc message bytes={}", descriptor.size);
+    crate::app::handle_ipc_message(descriptor.address as *const u8, descriptor.size as usize);
     unsafe {
         crate::sys::mach::mach_msg_destroy(&mut (*message).header);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipc_message_layout_matches_mach_complex_message_abi() {
+        assert_eq!(std::mem::size_of::<MachMessage>(), 44);
+        assert_eq!(std::mem::align_of::<MachMessage>(), 4);
+        assert_eq!(std::mem::offset_of!(MachMessage, descriptor_count), 24);
+        assert_eq!(std::mem::offset_of!(MachMessage, descriptor), 28);
     }
 }

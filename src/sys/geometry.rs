@@ -117,3 +117,16 @@ impl fmt::Display for SpaceId {
         self.0.fmt(formatter)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_graphics_geometry_layout_matches_64_bit_abi() {
+        assert_eq!(std::mem::size_of::<CGPoint>(), 16);
+        assert_eq!(std::mem::size_of::<CGSize>(), 16);
+        assert_eq!(std::mem::size_of::<CGRect>(), 32);
+        assert_eq!(std::mem::size_of::<CGAffineTransform>(), 48);
+    }
+}

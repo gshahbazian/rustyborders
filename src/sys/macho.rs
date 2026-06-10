@@ -82,7 +82,7 @@ pub unsafe fn find_symbol(
             continue;
         }
 
-        let slide = unsafe { _dyld_get_image_vmaddr_slide(image_index) } as u64;
+        let slide = unsafe { _dyld_get_image_vmaddr_slide(image_index) };
         let header = unsafe { _dyld_get_image_header(image_index) };
         if header.is_null() {
             return None;
@@ -96,7 +96,7 @@ pub unsafe fn find_symbol(
 
 unsafe fn find_symbol_in_image(
     header: *const MachHeader64,
-    slide: u64,
+    slide: isize,
     target_symbol: &str,
 ) -> Option<*mut std::ffi::c_void> {
     let mut offset = std::mem::size_of::<MachHeader64>();
@@ -131,9 +131,11 @@ unsafe fn find_symbol_in_image(
 
     let linkedit = linkedit?;
     let symtab = symtab?;
-    let linkedit_base = linkedit.vmaddr - linkedit.fileoff + slide;
-    let string_table = (linkedit_base + u64::from(symtab.stroff)) as *const c_char;
-    let symbol_table = (linkedit_base + u64::from(symtab.symoff)) as *const Nlist64;
+    let linkedit_base = i128::from(linkedit.vmaddr) - i128::from(linkedit.fileoff) + slide as i128;
+    let string_table_addr = linkedit_base + i128::from(symtab.stroff);
+    let symbol_table_addr = linkedit_base + i128::from(symtab.symoff);
+    let string_table = usize::try_from(string_table_addr).ok()? as *const c_char;
+    let symbol_table = usize::try_from(symbol_table_addr).ok()? as *const Nlist64;
 
     for index in 0..symtab.nsyms {
         let list = unsafe { symbol_table.add(index as usize) };
@@ -143,7 +145,8 @@ unsafe fn find_symbol_in_image(
         }
         let symbol_name = unsafe { CStr::from_ptr(symbol_name) }.to_string_lossy();
         if symbol_name == target_symbol {
-            return Some((unsafe { (*list).n_value } + slide) as *mut std::ffi::c_void);
+            let address = i128::from(unsafe { (*list).n_value }) + slide as i128;
+            return Some(usize::try_from(address).ok()? as *mut std::ffi::c_void);
         }
     }
 
