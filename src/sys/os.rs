@@ -63,7 +63,6 @@ unsafe extern "C" {
     );
     pub fn CGContextSetLineWidth(context: CGContextRef, width: f64);
     pub fn CGContextClearRect(context: CGContextRef, rect: CGRect);
-    pub fn CGContextFillRect(context: CGContextRef, rect: CGRect);
     pub fn CGContextAddPath(context: CGContextRef, path: CGPathRef);
     pub fn CGContextEOClip(context: CGContextRef);
     pub fn CGContextFillPath(context: CGContextRef);

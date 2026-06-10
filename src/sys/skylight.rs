@@ -33,14 +33,6 @@ unsafe extern "C" {
     pub fn SLSGetWindowBounds(cid: c_int, wid: u32, frame: *mut CGRect) -> CGError;
     pub fn CGSNewRegionWithRect(rect: *const CGRect, out_region: *mut CFTypeRef) -> CGError;
     pub fn CGRegionCreateEmptyRegion() -> CFTypeRef;
-    pub fn SLSNewWindow(
-        cid: c_int,
-        window_type: c_int,
-        x: f32,
-        y: f32,
-        region: CFTypeRef,
-        wid: *mut u32,
-    ) -> CGError;
     pub fn SLSNewWindowWithOpaqueShapeAndContext(
         cid: c_int,
         window_type: c_int,
@@ -92,47 +84,6 @@ unsafe extern "C" {
     pub fn SLSGetWindowSubLevel(cid: c_int, wid: u32) -> i32;
     pub fn SLSMoveWindowsToManagedSpace(cid: c_int, window_list: CFArrayRef, sid: u64) -> CGError;
     pub fn SLWindowContextCreate(cid: c_int, wid: u32, options: CFDictionaryRef) -> CGContextRef;
-
-    pub fn SLSTransactionCreate(cid: c_int) -> CFTypeRef;
-    pub fn SLSTransactionSetWindowLevel(transaction: CFTypeRef, wid: u32, level: c_int) -> CGError;
-    pub fn SLSTransactionSetWindowSubLevel(
-        transaction: CFTypeRef,
-        wid: u32,
-        level: c_int,
-    ) -> CGError;
-    pub fn SLSTransactionSetWindowShape(
-        transaction: CFTypeRef,
-        wid: u32,
-        x_offset: f32,
-        y_offset: f32,
-        shape: CFTypeRef,
-    ) -> CGError;
-    pub fn SLSTransactionMoveWindowWithGroup(
-        transaction: CFTypeRef,
-        wid: u32,
-        point: CGPoint,
-    ) -> CGError;
-    pub fn SLSTransactionOrderWindow(
-        transaction: CFTypeRef,
-        wid: u32,
-        order: c_int,
-        rel_wid: u32,
-    ) -> CGError;
-    pub fn SLSTransactionSetWindowAlpha(transaction: CFTypeRef, wid: u32, alpha: f32) -> CGError;
-    pub fn SLSTransactionSetWindowSystemAlpha(
-        transaction: CFTypeRef,
-        wid: u32,
-        alpha: f32,
-    ) -> CGError;
-    pub fn SLSTransactionSetWindowTransform(
-        transaction: CFTypeRef,
-        wid: u32,
-        not: c_int,
-        important: c_int,
-        transform: CGAffineTransform,
-    ) -> CGError;
-    pub fn SLSTransactionCommit(transaction: CFTypeRef, synchronous: c_int) -> CGError;
-    pub fn SLSTransactionCommitUsingMethod(transaction: CFTypeRef, method: u32) -> CGError;
 
     pub fn SLSWindowFreezeWithOptions(cid: c_int, wid: u32, options: CFTypeRef) -> CGError;
     pub fn SLSWindowThaw(cid: c_int, wid: u32) -> CGError;

@@ -2,29 +2,27 @@ use std::ptr;
 
 use crate::drawing;
 use crate::settings::{
-    BORDER_ORDER_ABOVE, BORDER_ORDER_BELOW, BORDER_PADDING, BORDER_STYLE_ROUND_UNIFORM,
-    BORDER_STYLE_SQUARE, BORDER_TSMN, ColorStyle, Settings, border_tsmw,
+    BORDER_ORDER_ABOVE, BORDER_PADDING, BORDER_STYLE_ROUND_UNIFORM, BORDER_STYLE_SQUARE,
+    BORDER_TSMN, ColorStyle, Settings, border_tsmw,
 };
 use crate::sys::cf::{
     CFDictionaryCreate, CFNumberCreate, CFRelease, CFTypeRef, K_CF_NUMBER_CFINDEX_TYPE, OwnedCf,
-    cf_string, cfarray_of_u32,
+    cf_string,
 };
 use crate::sys::geometry::{CGAffineTransform, CGPoint, CGRect, SpaceId, WindowId};
 use crate::sys::os::{
-    CGContextClearRect, CGContextFillRect, CGContextFlush, CGContextRef, CGContextRestoreGState,
-    CGContextSaveGState, CGContextSetInterpolationQuality, CGContextSetLineWidth, CGDisplayBounds,
-    CGMainDisplayID, K_CG_BACKING_STORE_BUFFERED, K_CG_INTERPOLATION_NONE,
+    CGContextClearRect, CGContextFlush, CGContextRef, CGContextRestoreGState, CGContextSaveGState,
+    CGContextSetInterpolationQuality, CGContextSetLineWidth, CGDisplayBounds, CGMainDisplayID,
+    K_CG_BACKING_STORE_BUFFERED, K_CG_INTERPOLATION_NONE,
 };
 use crate::sys::skylight::{
     CGRegionCreateEmptyRegion, CGSNewRegionWithRect, SLSClearWindowTags, SLSDisableUpdate,
     SLSFlushWindowContentRegion, SLSGetWindowBounds, SLSMainConnectionID, SLSMoveWindow,
-    SLSNewConnection, SLSNewWindow, SLSNewWindowWithOpaqueShapeAndContext, SLSOrderWindow,
-    SLSReenableUpdate, SLSReleaseConnection, SLSReleaseWindow, SLSSetWindowAlpha,
-    SLSSetWindowLevel, SLSSetWindowOpacity, SLSSetWindowResolution, SLSSetWindowShape,
-    SLSSetWindowSubLevel, SLSSetWindowTags, SLSTransactionCommit, SLSTransactionCreate,
-    SLSTransactionMoveWindowWithGroup, SLSTransactionOrderWindow, SLSTransactionSetWindowLevel,
-    SLSTransactionSetWindowSubLevel, SLSTransactionSetWindowTransform, SLSWindowFreezeWithOptions,
-    SLSWindowIsOrderedIn, SLSWindowSetShadowProperties, SLSWindowThaw, SLWindowContextCreate,
+    SLSNewConnection, SLSNewWindowWithOpaqueShapeAndContext, SLSOrderWindow, SLSReenableUpdate,
+    SLSReleaseConnection, SLSReleaseWindow, SLSSetWindowAlpha, SLSSetWindowLevel,
+    SLSSetWindowOpacity, SLSSetWindowResolution, SLSSetWindowShape, SLSSetWindowSubLevel,
+    SLSSetWindowTags, SLSWindowFreezeWithOptions, SLSWindowIsOrderedIn,
+    SLSWindowSetShadowProperties, SLSWindowThaw, SLWindowContextCreate,
 };
 use crate::windows::{
     WINDOW_TAG_STICKY, is_space_visible, window_level, window_send_to_space, window_space_id,
@@ -119,42 +117,11 @@ impl Border {
         }
 
         let settings = self.settings(global_settings).clone();
-        if force_unmanaged_windows() || self.is_proxy {
-            self.needs_redraw = true;
-            self.update_internal(&settings, server_port);
-            return;
-        }
-
-        let mut window_frame = CGRect::ZERO;
-        unsafe {
-            SLSGetWindowBounds(self.cid, self.target_wid.0, &mut window_frame);
-        }
-        let origin = CGPoint {
-            x: window_frame.origin.x - settings.border_width - BORDER_PADDING,
-            y: window_frame.origin.y - settings.border_width - BORDER_PADDING,
-        };
-
-        if let Some(wid) = self.wid
-            && let Some(transaction) = transaction(self.cid)
-        {
-            unsafe {
-                SLSTransactionMoveWindowWithGroup(transaction.as_raw(), wid.0, origin);
-                SLSTransactionCommit(transaction.as_raw(), 0);
-            }
-        }
-        self.target_bounds = window_frame;
-        self.origin = origin;
+        self.needs_redraw = true;
+        self.update_internal(&settings, server_port);
     }
 
     pub fn hide(&mut self) {
-        if let Some(wid) = self.wid
-            && let Some(transaction) = transaction(self.cid)
-        {
-            unsafe {
-                SLSTransactionOrderWindow(transaction.as_raw(), wid.0, 0, self.target_wid.0);
-                SLSTransactionCommit(transaction.as_raw(), 0);
-            }
-        }
         if let Some(wid) = self.wid {
             unsafe {
                 SLSOrderWindow(self.cid, wid.0, 0, self.target_wid.0);
@@ -171,19 +138,6 @@ impl Border {
         }
 
         let settings = self.settings(global_settings);
-        if let Some(wid) = self.wid
-            && let Some(transaction) = transaction(self.cid)
-        {
-            unsafe {
-                SLSTransactionOrderWindow(
-                    transaction.as_raw(),
-                    wid.0,
-                    settings.border_order,
-                    self.target_wid.0,
-                );
-                SLSTransactionCommit(transaction.as_raw(), 0);
-            }
-        }
         if let Some(wid) = self.wid {
             unsafe {
                 SLSOrderWindow(self.cid, wid.0, settings.border_order, self.target_wid.0);
@@ -240,7 +194,7 @@ impl Border {
         );
 
         if self.wid.is_none() {
-            self.create_window(frame, self.is_proxy, settings.hidpi);
+            self.create_window(frame, settings.hidpi);
         }
 
         let Some(wid) = self.wid else {
@@ -288,72 +242,6 @@ impl Border {
                 }
             }
             return;
-        }
-
-        if transaction_enabled()
-            && let Some(transaction) = transaction(self.cid)
-        {
-            unsafe {
-                let err =
-                    SLSTransactionMoveWindowWithGroup(transaction.as_raw(), wid.0, self.origin);
-                if err != 0 {
-                    crate::rb_log!(
-                        "window {}: SLSTransactionMoveWindowWithGroup failed err={err}",
-                        self.target_wid
-                    );
-                }
-            }
-            if !self.is_proxy {
-                let mut transform = CGAffineTransform::identity();
-                transform.tx = -self.origin.x;
-                transform.ty = -self.origin.y;
-                unsafe {
-                    let err = SLSTransactionSetWindowTransform(
-                        transaction.as_raw(),
-                        wid.0,
-                        0,
-                        0,
-                        transform,
-                    );
-                    if err != 0 {
-                        crate::rb_log!(
-                            "window {}: SLSTransactionSetWindowTransform failed err={err}",
-                            self.target_wid
-                        );
-                    }
-                }
-            }
-            unsafe {
-                let level_err = SLSTransactionSetWindowLevel(transaction.as_raw(), wid.0, level);
-                let sublevel_err =
-                    SLSTransactionSetWindowSubLevel(transaction.as_raw(), wid.0, sub_level);
-                let order_err = SLSTransactionOrderWindow(
-                    transaction.as_raw(),
-                    wid.0,
-                    settings.border_order,
-                    self.target_wid.0,
-                );
-                let commit_err = SLSTransactionCommit(transaction.as_raw(), 0);
-                crate::rb_log!(
-                    "window {}: transaction border={} order={} rel={} move_to={:?} level_err={} sublevel_err={} order_err={} commit_err={}",
-                    self.target_wid,
-                    wid,
-                    settings.border_order,
-                    self.target_wid,
-                    self.origin,
-                    level_err,
-                    sublevel_err,
-                    order_err,
-                    commit_err
-                );
-            }
-        } else if transaction_enabled() {
-            crate::rb_log!(
-                "window {}: SLSTransactionCreate returned null",
-                self.target_wid
-            );
-        } else {
-            crate::rb_log!("window {}: transaction path disabled", self.target_wid);
         }
 
         unsafe {
@@ -451,14 +339,8 @@ impl Border {
             || smallest_rect.size.height < 2.0 * self.inner_radius
     }
 
-    fn create_window(&mut self, frame: CGRect, unmanaged: bool, hidpi: bool) {
-        let unmanaged = unmanaged || force_unmanaged_windows();
-        let overlay_frame = if unmanaged {
-            main_display_bounds()
-        } else {
-            frame
-        };
-        let wid = create_sls_window(self.cid, overlay_frame, self.origin, hidpi, unmanaged);
+    fn create_window(&mut self, frame: CGRect, hidpi: bool) {
+        let wid = create_sls_window(self.cid, main_display_bounds(), self.origin, hidpi);
         let Some(wid) = wid else {
             crate::rb_log!(
                 "window {}: create_sls_window returned None frame={:?}",
@@ -532,54 +414,15 @@ impl Border {
             None
         };
 
-        let absolute_overlay = force_unmanaged_windows() || self.is_proxy;
-        let draw_frame = if absolute_overlay {
-            flip_rect_for_context(CGRect {
-                origin: self.origin,
-                size: frame.size,
-            })
-        } else {
-            frame
-        };
-        let effective_drawing_bounds = if absolute_overlay {
-            flip_rect_for_context(self.target_bounds)
-        } else {
-            self.drawing_bounds
-        };
-
-        let clear_frame = if absolute_overlay {
-            main_display_bounds()
-        } else {
-            draw_frame
-        };
+        let draw_frame = flip_rect_for_context(CGRect {
+            origin: self.origin,
+            size: frame.size,
+        });
+        let effective_drawing_bounds = flip_rect_for_context(self.target_bounds);
 
         unsafe {
             CGContextSetLineWidth(self.context, settings.border_width);
-            CGContextClearRect(self.context, clear_frame);
-        }
-
-        if debug_fill_enabled() {
-            unsafe {
-                drawing::set_fill(self.context, 0x8800ff00);
-                CGContextFillRect(self.context, draw_frame);
-                CGContextFlush(self.context);
-            }
-            if let Some(wid) = self.wid {
-                unsafe {
-                    SLSFlushWindowContentRegion(self.cid, wid.0, ptr::null_mut());
-                    SLSWindowThaw(self.cid, wid.0);
-                }
-                crate::rb_log!(
-                    "window {}: debug-filled entire border window {} frame={:?}",
-                    self.target_wid,
-                    wid,
-                    draw_frame
-                );
-            }
-            unsafe {
-                CGContextRestoreGState(self.context);
-            }
-            return;
+            CGContextClearRect(self.context, main_display_bounds());
         }
 
         let mut path_rect = effective_drawing_bounds;
@@ -727,33 +570,6 @@ impl Border {
     }
 }
 
-fn debug_fill_enabled() -> bool {
-    std::env::var("RUSTYBORDERS_DEBUG_FILL").is_ok_and(|value| {
-        matches!(
-            value.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
-fn transaction_enabled() -> bool {
-    std::env::var("RUSTYBORDERS_USE_TX").is_ok_and(|value| {
-        matches!(
-            value.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
-fn force_unmanaged_windows() -> bool {
-    !std::env::var("RUSTYBORDERS_USE_MANAGED").is_ok_and(|value| {
-        matches!(
-            value.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
 fn main_display_bounds() -> CGRect {
     unsafe { CGDisplayBounds(CGMainDisplayID()) }
 }
@@ -780,18 +596,7 @@ impl Drop for Border {
     }
 }
 
-fn transaction(cid: i32) -> Option<OwnedCf<CFTypeRef>> {
-    let raw = unsafe { SLSTransactionCreate(cid) };
-    unsafe { OwnedCf::from_create_rule(raw) }
-}
-
-fn create_sls_window(
-    cid: i32,
-    frame: CGRect,
-    origin: CGPoint,
-    hidpi: bool,
-    unmanaged: bool,
-) -> Option<WindowId> {
+fn create_sls_window(cid: i32, frame: CGRect, origin: CGPoint, hidpi: bool) -> Option<WindowId> {
     let mut frame_region: CFTypeRef = ptr::null();
     let region_frame = frame;
     unsafe {
@@ -809,66 +614,47 @@ fn create_sls_window(
     let mut set_tags = (1_u64 << 1) | (1_u64 << 9);
     let mut clear_tags = 0_u64;
 
-    if unmanaged {
-        crate::rb_log!("creating unmanaged border window frame={frame:?} origin={origin:?}");
-        let empty_region = unsafe { CGRegionCreateEmptyRegion() };
-        let empty_region = (unsafe { OwnedCf::from_create_rule(empty_region) })?;
-        unsafe {
-            let err = SLSNewWindowWithOpaqueShapeAndContext(
-                cid,
-                K_CG_BACKING_STORE_BUFFERED,
-                frame_region.as_raw(),
-                empty_region.as_raw(),
-                13 | (1 << 18),
-                &mut set_tags,
-                -9999.0_f32,
-                -9999.0_f32,
-                64,
-                &mut id,
-                ptr::null_mut(),
-            );
-            if err != 0 {
-                crate::rb_log!("SLSNewWindowWithOpaqueShapeAndContext failed err={err}");
-            }
-            SLSSetWindowAlpha(cid, id, 0.0_f32);
+    crate::rb_log!("creating border overlay window frame={frame:?} origin={origin:?}");
+    let empty_region = unsafe { CGRegionCreateEmptyRegion() };
+    let empty_region = (unsafe { OwnedCf::from_create_rule(empty_region) })?;
+    unsafe {
+        let err = SLSNewWindowWithOpaqueShapeAndContext(
+            cid,
+            K_CG_BACKING_STORE_BUFFERED,
+            frame_region.as_raw(),
+            empty_region.as_raw(),
+            13 | (1 << 18),
+            &mut set_tags,
+            -9999.0_f32,
+            -9999.0_f32,
+            64,
+            &mut id,
+            ptr::null_mut(),
+        );
+        if err != 0 {
+            crate::rb_log!("SLSNewWindowWithOpaqueShapeAndContext failed err={err}");
         }
-    } else {
-        crate::rb_log!("creating managed border window frame={frame:?} origin={origin:?}");
-        unsafe {
-            let err = SLSNewWindow(
-                cid,
-                K_CG_BACKING_STORE_BUFFERED,
-                -9999.0_f32,
-                -9999.0_f32,
-                frame_region.as_raw(),
-                &mut id,
-            );
-            if err != 0 {
-                crate::rb_log!("SLSNewWindow failed err={err} frame={frame:?}");
-            }
-        }
+        SLSSetWindowAlpha(cid, id, 0.0_f32);
     }
 
     if id == 0 {
-        crate::rb_log!("SLSNewWindow returned id=0 frame={frame:?}");
+        crate::rb_log!("SLSNewWindowWithOpaqueShapeAndContext returned id=0 frame={frame:?}");
         return None;
     }
 
     unsafe {
         SLSSetWindowResolution(cid, id, if hidpi { 2.0 } else { 1.0 });
-        if unmanaged {
-            let shape_err = SLSSetWindowShape(
-                cid,
-                id,
-                origin.x as f32,
-                origin.y as f32,
-                frame_region.as_raw(),
+        let shape_err = SLSSetWindowShape(
+            cid,
+            id,
+            origin.x as f32,
+            origin.y as f32,
+            frame_region.as_raw(),
+        );
+        if shape_err != 0 {
+            crate::rb_log!(
+                "SLSSetWindowShape initial failed err={shape_err} wid={id} origin={origin:?}"
             );
-            if shape_err != 0 {
-                crate::rb_log!(
-                    "SLSSetWindowShape initial unmanaged failed err={shape_err} wid={id} origin={origin:?}"
-                );
-            }
         }
         SLSSetWindowTags(cid, id, &mut set_tags, 64);
         SLSClearWindowTags(cid, id, &mut clear_tags, 64);
@@ -916,11 +702,4 @@ fn clear_shadow(wid: u32) {
             SLSWindowSetShadowProperties(wid, dictionary.as_raw());
         }
     }
-}
-
-#[allow(dead_code)]
-fn _assert_imports() {
-    let _ = BORDER_ORDER_BELOW;
-    let _ = cfarray_of_u32 as fn(&[u32]) -> Option<OwnedCf<crate::sys::cf::CFArrayRef>>;
-    let _ = SLSSetWindowShape as unsafe extern "C" fn(i32, u32, f32, f32, CFTypeRef) -> _;
 }
