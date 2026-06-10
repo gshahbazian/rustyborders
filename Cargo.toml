@@ -1,0 +1,9 @@
+[package]
+name = "rustyborders"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitflags = "2.9"
+libc = "0.2"
+thiserror = "2.0"
