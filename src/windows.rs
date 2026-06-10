@@ -418,7 +418,7 @@ pub fn ax_check_trust(prompt: bool) -> bool {
 }
 
 pub fn ax_get_front_window(cid: i32) -> WindowId {
-    if !ax_check_trust(true) {
+    if !ax_check_trust(false) {
         return WindowId(0);
     }
 
@@ -651,7 +651,6 @@ pub fn create_window_border(
         border.frame
     );
 
-    update_notifications(windows);
     created
 }
 

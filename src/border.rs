@@ -44,10 +44,7 @@ pub struct Border {
     pub origin: CGPoint,
     pub frame: CGRect,
     pub target_bounds: CGRect,
-    pub drawing_bounds: CGRect,
     pub context: CGContextRef,
-    pub is_proxy: bool,
-    pub external_proxy_wid: Option<WindowId>,
     pub setting_override: Option<Settings>,
 }
 
@@ -78,10 +75,7 @@ impl Border {
             origin: CGPoint::ZERO,
             frame: CGRect::ZERO,
             target_bounds: CGRect::ZERO,
-            drawing_bounds: CGRect::ZERO,
             context: ptr::null_mut(),
-            is_proxy: false,
-            external_proxy_wid: None,
             setting_override: None,
         }
     }
@@ -96,13 +90,6 @@ impl Border {
     }
 
     pub fn update(&mut self, global_settings: &Settings, server_port: crate::sys::mach::MachPort) {
-        if self.external_proxy_wid.is_some() {
-            crate::rb_log!(
-                "window {}: update skipped due to external proxy",
-                self.target_wid
-            );
-            return;
-        }
         let settings = self.settings(global_settings).clone();
         self.update_internal(&settings, server_port);
     }
@@ -112,7 +99,7 @@ impl Border {
         global_settings: &Settings,
         server_port: crate::sys::mach::MachPort,
     ) {
-        if self.external_proxy_wid.is_some() || self.wid.is_none() {
+        if self.wid.is_none() {
             return;
         }
 
@@ -130,10 +117,7 @@ impl Border {
     }
 
     pub fn unhide(&mut self, global_settings: &Settings) {
-        if self.too_small
-            || self.external_proxy_wid.is_some()
-            || (!self.sticky && !is_space_visible(self.cid, self.sid))
-        {
+        if self.too_small || (!self.sticky && !is_space_visible(self.cid, self.sid)) {
             return;
         }
 
@@ -154,11 +138,10 @@ impl Border {
             return;
         };
         crate::rb_log!(
-            "window {}: bounds frame={:?} origin={:?} drawing={:?}",
+            "window {}: bounds frame={:?} origin={:?}",
             self.target_wid,
             frame,
-            self.origin,
-            self.drawing_bounds
+            self.origin
         );
 
         let tags = window_tags(self.cid, self.target_wid);
@@ -176,7 +159,7 @@ impl Border {
         unsafe {
             SLSWindowIsOrderedIn(self.cid, self.target_wid.0, &mut shown);
         }
-        if !shown && !self.is_proxy {
+        if !shown {
             crate::rb_log!(
                 "window {}: target not ordered in; hiding border",
                 self.target_wid
@@ -246,15 +229,11 @@ impl Border {
 
         unsafe {
             let move_err = SLSMoveWindow(self.cid, wid.0, std::ptr::addr_of!(self.origin));
-            let transform_err = if self.is_proxy {
-                0
-            } else {
-                crate::sys::skylight::SLSSetWindowTransform(
-                    self.cid,
-                    wid.0,
-                    CGAffineTransform::identity(),
-                )
-            };
+            let transform_err = crate::sys::skylight::SLSSetWindowTransform(
+                self.cid,
+                wid.0,
+                CGAffineTransform::identity(),
+            );
             let level_err = SLSSetWindowLevel(self.cid, wid.0, level);
             let sublevel_err = SLSSetWindowSubLevel(self.cid, wid.0, sub_level);
             let alpha_err = SLSSetWindowAlpha(self.cid, wid.0, 1.0_f32);
@@ -297,15 +276,10 @@ impl Border {
     }
 
     fn calculate_bounds(&mut self, settings: &Settings) -> Option<CGRect> {
-        let mut window_frame = if self.is_proxy {
-            self.target_bounds
-        } else {
-            let mut frame = CGRect::ZERO;
-            unsafe {
-                SLSGetWindowBounds(self.cid, self.target_wid.0, &mut frame);
-            }
-            frame
-        };
+        let mut window_frame = CGRect::ZERO;
+        unsafe {
+            SLSGetWindowBounds(self.cid, self.target_wid.0, &mut window_frame);
+        }
 
         self.target_bounds = window_frame;
         self.too_small = self.check_too_small(window_frame);
@@ -325,11 +299,6 @@ impl Border {
         self.origin = frame.origin;
         frame.origin = CGPoint::ZERO;
 
-        window_frame.origin = CGPoint {
-            x: -border_offset,
-            y: -border_offset,
-        };
-        self.drawing_bounds = window_frame;
         Some(frame)
     }
 

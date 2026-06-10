@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::process::Command;
-use std::ptr;
 use std::sync::{Mutex, OnceLock};
 
 use libc::{RTLD_LAZY, RTLD_LOCAL, dlopen, dlsym};
@@ -14,7 +13,7 @@ use crate::ipc::{self, MachServer};
 use crate::parser::{ParseError, parse_settings};
 use crate::settings::{Settings, UpdateMask};
 use crate::sys::cf::{
-    CFArrayGetCount, CFArrayGetValueAtIndex, CFNumberGetValue, CFRelease, CFRunLoopRun, CFTypeRef,
+    CFArrayGetCount, CFArrayGetValueAtIndex, CFNumberGetValue, CFRunLoopRun, CFTypeRef,
     K_CF_NUMBER_SINT32_TYPE,
 };
 use crate::sys::geometry::{SpaceId, WindowId};
@@ -66,10 +65,14 @@ impl App {
             return;
         }
 
-        let Ok((settings, update_mask)) = ipc::parse_message_settings(&self.settings, &arguments)
+        let Ok((mut settings, update_mask)) =
+            ipc::parse_message_settings(&self.settings, &arguments)
         else {
             return;
         };
+        if settings.ax_focus && !self.settings.ax_focus {
+            settings.ax_focus = windows::ax_check_trust(true);
+        }
 
         if let Some(wid) = settings.apply_to {
             if let Some(border) = self.windows.get_mut(&wid) {
@@ -106,6 +109,16 @@ impl App {
     }
 
     fn recreate_all_borders(&mut self) {
+        let overrides = self
+            .windows
+            .iter()
+            .filter_map(|(wid, border)| {
+                border
+                    .setting_override
+                    .clone()
+                    .map(|settings| (*wid, settings))
+            })
+            .collect::<HashMap<_, _>>();
         for border in self.windows.values_mut() {
             border.destroy();
         }
@@ -116,6 +129,13 @@ impl App {
             &self.settings,
             self.server_port,
         );
+        for (wid, settings) in overrides {
+            if let Some(border) = self.windows.get_mut(&wid) {
+                border.set_override(settings);
+                border.update(&self.settings, self.server_port);
+            }
+        }
+        windows::update_notifications(&self.windows);
     }
 
     fn update_all(&mut self) {
@@ -179,6 +199,7 @@ impl App {
                 front_wid,
                 sid,
             ) {
+                windows::update_notifications(&self.windows);
                 self.focus_window(front_wid);
             }
         }
@@ -236,6 +257,7 @@ impl App {
             return;
         };
 
+        let mut created = false;
         while unsafe { crate::sys::skylight::SLSWindowIteratorAdvance(iterator.as_raw()) } {
             if !windows::window_suitable(iterator.as_raw()) {
                 continue;
@@ -246,7 +268,7 @@ impl App {
             if let Some(border) = self.windows.get_mut(&wid) {
                 border.update(&self.settings, self.server_port);
             } else {
-                windows::create_window_border(
+                created |= windows::create_window_border(
                     &mut self.windows,
                     self.pid,
                     &self.settings,
@@ -255,6 +277,9 @@ impl App {
                     windows::window_space_id(cid, wid),
                 );
             }
+        }
+        if created {
+            windows::update_notifications(&self.windows);
         }
     }
 }
@@ -283,6 +308,9 @@ pub fn run(arguments: Vec<String>) -> Result<(), AppError> {
     };
     let cli_arguments = arguments.into_iter().skip(1).collect::<Vec<_>>();
     let update_mask = parse_settings(&mut settings, &cli_arguments)?;
+    if settings.ax_focus {
+        settings.ax_focus = windows::ax_check_trust(true);
+    }
     crate::rb_log!(
         "parsed settings: width={} active={} inactive={} hidpi={} order={} style={} ax_focus={} update_mask={:?}",
         settings.border_width,
@@ -358,6 +386,7 @@ pub fn handle_window_create(wid: WindowId, sid: SpaceId, cid: i32) {
             wid,
             sid,
         ) {
+            windows::update_notifications(&app.windows);
             app.determine_and_focus_active_window();
         }
     });
@@ -459,10 +488,14 @@ fn with_app(function: impl FnOnce(&mut App)) {
     let Some(app) = APP.get() else {
         return;
     };
-    let Ok(mut app) = app.lock() else {
-        return;
+    match app.lock() {
+        Ok(mut app) => function(&mut app),
+        Err(poisoned) => {
+            crate::rb_log!("application state lock was poisoned; recovering");
+            let mut app = poisoned.into_inner();
+            function(&mut app);
+        }
     };
-    function(&mut app);
 }
 
 fn load_symbols() {
@@ -519,10 +552,4 @@ fn execute_config_file(name: &str, filename: &str) {
         .arg("-c")
         .arg(path)
         .spawn();
-}
-
-#[allow(dead_code)]
-fn _assert_imports() {
-    let _ = ptr::null::<()>;
-    let _ = CFRelease as unsafe extern "C" fn(CFTypeRef);
 }

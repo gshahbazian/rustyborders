@@ -1,5 +1,5 @@
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::c_char;
 
 const LC_SEGMENT_64: u32 = 0x19;
 const LC_SYMTAB: u32 = 0x2;
@@ -152,6 +152,3 @@ unsafe fn find_symbol_in_image(
 
     None
 }
-
-#[allow(dead_code)]
-fn _assert_c_int(_: c_int) {}

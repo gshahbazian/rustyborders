@@ -1,10 +1,12 @@
 use std::ptr;
-use std::thread;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::sys::cf::{
-    CFMachPortCreateRunLoopSource, CFMachPortCreateWithPort, CFRelease, CFRunLoopAddSource,
-    CFRunLoopGetCurrent, kCFRunLoopDefaultMode,
+    CFAbsoluteTimeGetCurrent, CFMachPortCreateRunLoopSource, CFMachPortCreateWithPort, CFRelease,
+    CFRunLoopAddSource, CFRunLoopAddTimer, CFRunLoopGetCurrent, CFRunLoopGetMain,
+    CFRunLoopTimerContext, CFRunLoopTimerCreate, CFRunLoopTimerRef, CFRunLoopWakeUp,
+    kCFRunLoopDefaultMode,
 };
 use crate::sys::geometry::{SpaceId, WindowId};
 use crate::sys::mach::MachPort;
@@ -27,11 +29,25 @@ pub const EVENT_WINDOW_DESTROY: u32 = 1326;
 pub const EVENT_SPACE_CHANGE: u32 = 1401;
 pub const EVENT_FRONT_CHANGE: u32 = 1508;
 
+static FOCUS_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SPACE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct WindowSpawnData {
     sid: u64,
     wid: u32,
+}
+
+#[derive(Clone, Copy)]
+enum DelayedTaskKind {
+    Focus,
+    Space,
+}
+
+struct DelayedTask {
+    kind: DelayedTaskKind,
+    generation: u64,
 }
 
 pub fn register(cid: i32) {
@@ -165,18 +181,76 @@ unsafe extern "C" fn notify_callback(
         }
         EVENT_FRONT_CHANGE => delayed_focus(Duration::from_micros(50_000)),
         EVENT_SPACE_CHANGE => {
-            thread::spawn(|| {
-                thread::sleep(Duration::from_micros(20_000));
-                crate::app::draw_borders_on_current_spaces();
-            });
+            delayed_space_update(Duration::from_micros(20_000));
         }
         _ => {}
     }
 }
 
 fn delayed_focus(delay: Duration) {
-    thread::spawn(move || {
-        thread::sleep(delay);
-        crate::app::determine_and_focus_active_window();
-    });
+    schedule_delayed_task(DelayedTaskKind::Focus, delay);
+}
+
+fn delayed_space_update(delay: Duration) {
+    schedule_delayed_task(DelayedTaskKind::Space, delay);
+}
+
+fn schedule_delayed_task(kind: DelayedTaskKind, delay: Duration) {
+    let generation = match kind {
+        DelayedTaskKind::Focus => FOCUS_GENERATION.fetch_add(1, Ordering::Relaxed) + 1,
+        DelayedTaskKind::Space => SPACE_GENERATION.fetch_add(1, Ordering::Relaxed) + 1,
+    };
+    let task = Box::new(DelayedTask { kind, generation });
+    let fire_date = unsafe { CFAbsoluteTimeGetCurrent() } + delay.as_secs_f64();
+    let mut context = CFRunLoopTimerContext {
+        version: 0,
+        info: Box::into_raw(task).cast(),
+        retain: ptr::null(),
+        release: ptr::null(),
+        copy_description: ptr::null(),
+    };
+    let timer = unsafe {
+        CFRunLoopTimerCreate(
+            ptr::null(),
+            fire_date,
+            0.0,
+            0,
+            0,
+            delayed_task_callback,
+            &mut context,
+        )
+    };
+    if timer.is_null() {
+        unsafe {
+            drop(Box::from_raw(context.info.cast::<DelayedTask>()));
+        }
+        return;
+    }
+
+    let main_run_loop = unsafe { CFRunLoopGetMain() };
+    unsafe {
+        CFRunLoopAddTimer(main_run_loop, timer, kCFRunLoopDefaultMode);
+        CFRelease(timer.cast());
+        CFRunLoopWakeUp(main_run_loop);
+    }
+}
+
+unsafe extern "C" fn delayed_task_callback(_timer: CFRunLoopTimerRef, info: *mut std::ffi::c_void) {
+    if info.is_null() {
+        return;
+    }
+
+    let task = unsafe { Box::from_raw(info.cast::<DelayedTask>()) };
+    match task.kind {
+        DelayedTaskKind::Focus => {
+            if FOCUS_GENERATION.load(Ordering::Relaxed) == task.generation {
+                crate::app::determine_and_focus_active_window();
+            }
+        }
+        DelayedTaskKind::Space => {
+            if SPACE_GENERATION.load(Ordering::Relaxed) == task.generation {
+                crate::app::draw_borders_on_current_spaces();
+            }
+        }
+    }
 }

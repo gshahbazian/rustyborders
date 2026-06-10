@@ -50,16 +50,12 @@ pub enum GradientDirection {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct Settings {
-    pub enabled: bool,
     pub apply_to: Option<WindowId>,
     pub active_window: ColorStyle,
     pub inactive_window: ColorStyle,
-    pub corner_mask: ColorStyle,
     pub background: ColorStyle,
     pub border_width: f64,
-    pub blur_radius: f64,
     pub border_style: char,
     pub hidpi: bool,
     pub show_background: bool,
@@ -74,14 +70,11 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            enabled: true,
             apply_to: None,
             active_window: ColorStyle::Solid(0xffe1e3e4),
             inactive_window: ColorStyle::Solid(0x00000000),
-            corner_mask: ColorStyle::Solid(0x00000000),
             background: ColorStyle::Solid(0x00000000),
             border_width: 4.0,
-            blur_radius: 0.0,
             border_style: BORDER_STYLE_ROUND,
             hidpi: false,
             show_background: false,

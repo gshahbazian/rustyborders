@@ -9,6 +9,7 @@ use crate::sys::mach::MachPort;
 
 pub type Boolean = u8;
 pub type CFIndex = isize;
+pub type CFOptionFlags = u64;
 pub type CFTypeRef = *const c_void;
 pub type CFAllocatorRef = *const c_void;
 pub type CFArrayRef = *const c_void;
@@ -17,8 +18,11 @@ pub type CFNumberRef = *const c_void;
 pub type CFStringRef = *const c_void;
 pub type CFRunLoopRef = *const c_void;
 pub type CFRunLoopSourceRef = *const c_void;
+pub type CFRunLoopTimerRef = *const c_void;
 pub type CFMachPortRef = *const c_void;
 pub type CFUUIDRef = *const c_void;
+pub type CFAbsoluteTime = f64;
+pub type CFTimeInterval = f64;
 
 pub const K_CF_NUMBER_SINT32_TYPE: i32 = 3;
 pub const K_CF_NUMBER_SINT64_TYPE: i32 = 4;
@@ -64,6 +68,16 @@ pub struct CFMachPortContext {
 
 pub type CFMachPortCallBack =
     unsafe extern "C" fn(CFMachPortRef, *mut c_void, CFIndex, *mut c_void);
+pub type CFRunLoopTimerCallBack = unsafe extern "C" fn(CFRunLoopTimerRef, *mut c_void);
+
+#[repr(C)]
+pub struct CFRunLoopTimerContext {
+    pub version: CFIndex,
+    pub info: *mut c_void,
+    pub retain: *const c_void,
+    pub release: *const c_void,
+    pub copy_description: *const c_void,
+}
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
@@ -119,7 +133,19 @@ unsafe extern "C" {
     pub fn CFRunLoopGetCurrent() -> CFRunLoopRef;
     pub fn CFRunLoopGetMain() -> CFRunLoopRef;
     pub fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
+    pub fn CFRunLoopAddTimer(rl: CFRunLoopRef, timer: CFRunLoopTimerRef, mode: CFStringRef);
+    pub fn CFRunLoopWakeUp(rl: CFRunLoopRef);
+    pub fn CFRunLoopTimerCreate(
+        allocator: CFAllocatorRef,
+        fire_date: CFAbsoluteTime,
+        interval: CFTimeInterval,
+        flags: CFOptionFlags,
+        order: CFIndex,
+        callout: CFRunLoopTimerCallBack,
+        context: *mut CFRunLoopTimerContext,
+    ) -> CFRunLoopTimerRef;
     pub fn CFRunLoopRun();
+    pub fn CFAbsoluteTimeGetCurrent() -> CFAbsoluteTime;
 }
 
 pub struct OwnedCf<T: Copy + Into<CFTypeRef>> {
