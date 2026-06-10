@@ -15,6 +15,7 @@ use crate::parser::{ParseError, parse_settings};
 use crate::settings::{Settings, UpdateMask};
 use crate::sys::cf::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFNumberGetValue, CFRelease, CFRunLoopRun, CFTypeRef,
+    K_CF_NUMBER_SINT32_TYPE,
 };
 use crate::sys::geometry::{SpaceId, WindowId};
 use crate::sys::mach::{MachPort, mach_task_self, pid_for_task};
@@ -447,7 +448,7 @@ pub fn corner_radius_for_iterator(iterator: CFTypeRef) -> Option<f64> {
     unsafe {
         CFNumberGetValue(
             value,
-            crate::sys::cf::CFNumberGetType(value),
+            K_CF_NUMBER_SINT32_TYPE,
             (&mut radius as *mut i32).cast(),
         );
     }
