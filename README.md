@@ -31,14 +31,19 @@ Useful options currently include:
 - `width=6.0`
 - `active_color=0xff00ff00`
 - `inactive_color=0x00000000`
-- `background_color=0x00000000`
-- `order=above` or `order=below`
-- `style=round`, `style=square`, or `style=uniform`
-- `hidpi=on` or `hidpi=off`
-- `ax_focus=on` or `ax_focus=off`
+- `active_color="#00ff00"`
+- `active_color="color(display-p3 0.059 0.978 0.355 / 1)"`
+- `active_color="oklch(84% 0.32 150 / 1)"`
 - `blacklist=AppName,OtherApp`
 - `whitelist=AppName,OtherApp`
 - `apply-to=<window_id>`
+
+Borders are always rendered in HiDPI using the built-in style, order, background,
+and focus-detection defaults.
+
+Color values accept legacy `0xAARRGGBB`, `#RRGGBB`, `#AARRGGBB`, CSS
+`color(srgb ...)`, CSS `color(display-p3 ...)`, and `oklch(...)`. OKLCH colors
+are converted to Display P3 and rejected if they are outside the P3 gamut.
 
 Enable debug logging with:
 

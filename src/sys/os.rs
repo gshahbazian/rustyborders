@@ -12,6 +12,7 @@ pub type CGContextRef = *mut c_void;
 pub type CGPathRef = *mut c_void;
 pub type CGMutablePathRef = *mut c_void;
 pub type CGColorRef = *mut c_void;
+pub type CGColorSpaceRef = *mut c_void;
 pub type CGGradientRef = *mut c_void;
 pub type CGEventRef = *mut c_void;
 pub type AXUIElementRef = *mut c_void;
@@ -51,10 +52,13 @@ unsafe extern "C" {
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
+    pub static kCGColorSpaceDisplayP3: CFStringRef;
+    pub static kCGColorSpaceSRGB: CFStringRef;
+
     pub fn CGContextSaveGState(context: CGContextRef);
     pub fn CGContextRestoreGState(context: CGContextRef);
-    pub fn CGContextSetRGBFillColor(context: CGContextRef, r: f64, g: f64, b: f64, a: f64);
-    pub fn CGContextSetRGBStrokeColor(context: CGContextRef, r: f64, g: f64, b: f64, a: f64);
+    pub fn CGContextSetFillColorWithColor(context: CGContextRef, color: CGColorRef);
+    pub fn CGContextSetStrokeColorWithColor(context: CGContextRef, color: CGColorRef);
     pub fn CGContextSetShadowWithColor(
         context: CGContextRef,
         offset: CGSize,
@@ -89,7 +93,6 @@ unsafe extern "C" {
         corner_width: f64,
         corner_height: f64,
     );
-    pub fn CGPathCreateWithRect(rect: CGRect, transform: *const c_void) -> CGPathRef;
     pub fn CGPathCreateWithRoundedRect(
         rect: CGRect,
         corner_width: f64,
@@ -97,11 +100,12 @@ unsafe extern "C" {
         transform: *const c_void,
     ) -> CGPathRef;
 
-    pub fn CGColorCreateGenericRGB(r: f64, g: f64, b: f64, a: f64) -> CGColorRef;
-    pub fn CGColorCreateSRGB(r: f64, g: f64, b: f64, a: f64) -> CGColorRef;
+    pub fn CGColorCreate(color_space: CGColorSpaceRef, components: *const f64) -> CGColorRef;
     pub fn CGColorRelease(color: CGColorRef);
+    pub fn CGColorSpaceCreateWithName(name: CFStringRef) -> CGColorSpaceRef;
+    pub fn CGColorSpaceRelease(color_space: CGColorSpaceRef);
     pub fn CGGradientCreateWithColors(
-        color_space: *const c_void,
+        color_space: CGColorSpaceRef,
         colors: CFArrayRef,
         locations: *const f64,
     ) -> CGGradientRef;

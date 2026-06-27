@@ -65,14 +65,10 @@ impl App {
             return;
         }
 
-        let Ok((mut settings, update_mask)) =
-            ipc::parse_message_settings(&self.settings, &arguments)
+        let Ok((settings, update_mask)) = ipc::parse_message_settings(&self.settings, &arguments)
         else {
             return;
         };
-        if settings.ax_focus && !self.settings.ax_focus {
-            settings.ax_focus = windows::ax_check_trust(true);
-        }
 
         if let Some(wid) = settings.apply_to {
             if let Some(border) = self.windows.get_mut(&wid) {
@@ -312,13 +308,10 @@ pub fn run(arguments: Vec<String>) -> Result<(), AppError> {
         settings.ax_focus = windows::ax_check_trust(true);
     }
     crate::rb_log!(
-        "parsed settings: width={} active={} inactive={} hidpi={} order={} style={} ax_focus={} update_mask={:?}",
+        "parsed settings: width={} active={} inactive={} ax_focus={} update_mask={:?}",
         settings.border_width,
         settings.active_window,
         settings.inactive_window,
-        settings.hidpi,
-        settings.border_order,
-        settings.border_style,
         settings.ax_focus,
         update_mask
     );
@@ -443,7 +436,7 @@ pub fn handle_window_unhide(wid: WindowId, cid: i32) {
             return;
         }
         if let Some(border) = app.windows.get_mut(&wid) {
-            border.unhide(&app.settings);
+            border.unhide();
         }
     });
 }

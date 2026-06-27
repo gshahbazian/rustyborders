@@ -1,22 +1,12 @@
 use std::collections::HashSet;
-use std::ffi::CString;
 use std::fmt;
-use std::ptr;
-use std::sync::OnceLock;
 
 use bitflags::bitflags;
 
 use crate::sys::geometry::WindowId;
 
-pub const BORDER_ORDER_ABOVE: i32 = 1;
 pub const BORDER_ORDER_BELOW: i32 = -1;
-pub const BORDER_STYLE_ROUND: char = 'r';
-pub const BORDER_STYLE_ROUND_UNIFORM: char = 'u';
-pub const BORDER_STYLE_SQUARE: char = 's';
 pub const BORDER_PADDING: f64 = 8.0;
-pub const BORDER_TSMN: f64 = 3.27;
-pub const BORDER_TSMW_LEGACY: f64 = 8.0;
-pub const BORDER_TSMW_MACOS_26: f64 = 52.0;
 
 bitflags! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,18 +19,33 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ColorStyle {
-    Solid(u32),
+    Solid(Color),
     Gradient(Gradient),
-    Glow(u32),
+    Glow(Color),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Gradient {
     pub direction: GradientDirection,
-    pub color1: u32,
-    pub color2: u32,
+    pub color1: Color,
+    pub color2: Color,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Color {
+    pub space: ColorSpace,
+    pub red: f64,
+    pub green: f64,
+    pub blue: f64,
+    pub alpha: f64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ColorSpace {
+    Srgb,
+    DisplayP3,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,12 +59,7 @@ pub struct Settings {
     pub apply_to: Option<WindowId>,
     pub active_window: ColorStyle,
     pub inactive_window: ColorStyle,
-    pub background: ColorStyle,
     pub border_width: f64,
-    pub border_style: char,
-    pub hidpi: bool,
-    pub show_background: bool,
-    pub border_order: i32,
     pub ax_focus: bool,
     pub blacklist_enabled: bool,
     pub blacklist: HashSet<String>,
@@ -71,14 +71,14 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             apply_to: None,
-            active_window: ColorStyle::Solid(0xffe1e3e4),
-            inactive_window: ColorStyle::Solid(0x00000000),
-            background: ColorStyle::Solid(0x00000000),
+            active_window: ColorStyle::Solid(Color::srgb(
+                0.8823529411764706,
+                0.8901960784313725,
+                0.8941176470588236,
+                1.0,
+            )),
+            inactive_window: ColorStyle::Solid(Color::srgb(0.0, 0.0, 0.0, 0.0)),
             border_width: 4.0,
-            border_style: BORDER_STYLE_ROUND,
-            hidpi: false,
-            show_background: false,
-            border_order: BORDER_ORDER_BELOW,
             ax_focus: false,
             blacklist_enabled: false,
             blacklist: HashSet::new(),
@@ -99,73 +99,49 @@ impl Settings {
         true
     }
 
-    pub fn has_background_alpha(&self) -> bool {
-        self.background.is_visible()
-    }
-
     pub fn inactive_border_visible(&self) -> bool {
-        self.inactive_window.is_visible() || self.show_background
+        self.inactive_window.is_visible()
     }
 }
 
 impl ColorStyle {
     pub fn is_visible(&self) -> bool {
         match self {
-            ColorStyle::Solid(color) | ColorStyle::Glow(color) => color & 0xff00_0000 != 0,
+            ColorStyle::Solid(color) | ColorStyle::Glow(color) => color.is_visible(),
             ColorStyle::Gradient(_) => true,
         }
     }
 }
 
-pub fn border_tsmw() -> f64 {
-    static VALUE: OnceLock<f64> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        if macos_major_version().is_some_and(|major| major >= 26) {
-            BORDER_TSMW_MACOS_26
-        } else {
-            BORDER_TSMW_LEGACY
+impl Color {
+    pub const fn srgb(red: f64, green: f64, blue: f64, alpha: f64) -> Self {
+        Self {
+            space: ColorSpace::Srgb,
+            red,
+            green,
+            blue,
+            alpha,
         }
-    })
-}
-
-fn macos_major_version() -> Option<u32> {
-    let name = CString::new("kern.osproductversion").ok()?;
-    let mut size = 0_usize;
-    let size_result = unsafe {
-        libc::sysctlbyname(
-            name.as_ptr(),
-            ptr::null_mut(),
-            &mut size,
-            ptr::null_mut(),
-            0,
-        )
-    };
-    if size_result != 0 || size == 0 {
-        return None;
     }
 
-    let mut buffer = vec![0_u8; size];
-    let value_result = unsafe {
-        libc::sysctlbyname(
-            name.as_ptr(),
-            buffer.as_mut_ptr().cast(),
-            &mut size,
-            ptr::null_mut(),
-            0,
-        )
-    };
-    if value_result != 0 {
-        return None;
+    pub const fn display_p3(red: f64, green: f64, blue: f64, alpha: f64) -> Self {
+        Self {
+            space: ColorSpace::DisplayP3,
+            red,
+            green,
+            blue,
+            alpha,
+        }
     }
 
-    let nul = buffer.iter().position(|byte| *byte == 0).unwrap_or(size);
-    let version = std::str::from_utf8(&buffer[..nul]).ok()?;
-    version.split('.').next()?.parse().ok()
+    pub fn is_visible(&self) -> bool {
+        self.alpha > 0.0
+    }
 }
 
 impl ColorStyle {
-    pub fn solid_color(&self) -> Option<u32> {
-        match *self {
+    pub fn solid_color(&self) -> Option<&Color> {
+        match self {
             Self::Solid(color) | Self::Glow(color) => Some(color),
             Self::Gradient(_) => None,
         }
@@ -179,20 +155,37 @@ impl ColorStyle {
 impl fmt::Display for ColorStyle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Solid(color) => write!(formatter, "0x{color:08x}"),
-            Self::Glow(color) => write!(formatter, "glow(0x{color:08x})"),
+            Self::Solid(color) => write!(formatter, "{color}"),
+            Self::Glow(color) => write!(formatter, "glow({color})"),
             Self::Gradient(gradient) => match gradient.direction {
                 GradientDirection::TopLeftToBottomRight => write!(
                     formatter,
-                    "gradient(top_left=0x{:08x},bottom_right=0x{:08x})",
+                    "gradient(top_left={},bottom_right={})",
                     gradient.color1, gradient.color2
                 ),
                 GradientDirection::TopRightToBottomLeft => write!(
                     formatter,
-                    "gradient(top_right=0x{:08x},bottom_left=0x{:08x})",
+                    "gradient(top_right={},bottom_left={})",
                     gradient.color1, gradient.color2
                 ),
             },
+        }
+    }
+}
+
+impl fmt::Display for Color {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.space {
+            ColorSpace::Srgb => write!(
+                formatter,
+                "color(srgb {:.6} {:.6} {:.6} / {:.6})",
+                self.red, self.green, self.blue, self.alpha
+            ),
+            ColorSpace::DisplayP3 => write!(
+                formatter,
+                "color(display-p3 {:.6} {:.6} {:.6} / {:.6})",
+                self.red, self.green, self.blue, self.alpha
+            ),
         }
     }
 }

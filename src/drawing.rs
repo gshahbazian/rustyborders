@@ -1,55 +1,42 @@
 use std::ptr;
 
-use crate::settings::{ColorStyle, GradientDirection};
+use crate::settings::{Color, ColorSpace, ColorStyle, GradientDirection};
 use crate::sys::cf::{CFArrayRef, CFRelease, OwnedCf};
 use crate::sys::geometry::{CGAffineTransform, CGPoint, CGRect, CGSize};
 use crate::sys::os::{
-    CGColorCreateSRGB, CGColorRef, CGContextAddPath, CGContextClip, CGContextDrawLinearGradient,
-    CGContextEOClip, CGContextFillPath, CGContextRef, CGContextReplacePathWithStrokedPath,
-    CGContextSetRGBFillColor, CGContextSetRGBStrokeColor, CGContextSetShadowWithColor,
-    CGContextStrokePath, CGGradientCreateWithColors, CGGradientRef, CGMutablePathRef,
-    CGPathAddPath, CGPathAddRect, CGPathAddRoundedRect, CGPathCreateMutable, CGPathCreateWithRect,
-    CGPathCreateWithRoundedRect, CGPathRef,
+    CGColorCreate, CGColorRef, CGColorSpaceCreateWithName, CGColorSpaceRef, CGContextAddPath,
+    CGContextClip, CGContextDrawLinearGradient, CGContextEOClip, CGContextFillPath, CGContextRef,
+    CGContextReplacePathWithStrokedPath, CGContextSetFillColorWithColor,
+    CGContextSetShadowWithColor, CGContextSetStrokeColorWithColor, CGContextStrokePath,
+    CGGradientCreateWithColors, CGGradientRef, CGMutablePathRef, CGPathAddPath, CGPathAddRect,
+    CGPathAddRoundedRect, CGPathCreateMutable, CGPathCreateWithRoundedRect, CGPathRef,
+    kCGColorSpaceDisplayP3, kCGColorSpaceSRGB,
 };
-use crate::sys::os::{CGColorRelease, CGGradientRelease};
+use crate::sys::os::{CGColorRelease, CGColorSpaceRelease, CGGradientRelease};
 
-pub fn colors_from_hex(hex: u32) -> (f64, f64, f64, f64) {
-    let a = f64::from((hex >> 24) & 0xff) / 255.0;
-    let r = f64::from((hex >> 16) & 0xff) / 255.0;
-    let g = f64::from((hex >> 8) & 0xff) / 255.0;
-    let b = f64::from(hex & 0xff) / 255.0;
-    (a, r, g, b)
-}
-
-pub unsafe fn set_fill(context: CGContextRef, color: u32) {
-    let (a, r, g, b) = colors_from_hex(color);
+pub unsafe fn set_stroke_and_fill(context: CGContextRef, color: &Color, glow: bool) {
+    let Some(color_ref) = (unsafe { create_cg_color(color) }) else {
+        return;
+    };
     unsafe {
-        CGContextSetRGBFillColor(context, r, g, b, a);
-    }
-}
-
-pub unsafe fn set_stroke(context: CGContextRef, color: u32) {
-    let (a, r, g, b) = colors_from_hex(color);
-    unsafe {
-        CGContextSetRGBStrokeColor(context, r, g, b, a);
-    }
-}
-
-pub unsafe fn set_stroke_and_fill(context: CGContextRef, color: u32, glow: bool) {
-    let (a, r, g, b) = colors_from_hex(color);
-    unsafe {
-        CGContextSetRGBFillColor(context, r, g, b, a);
-        CGContextSetRGBStrokeColor(context, r, g, b, a);
+        CGContextSetFillColorWithColor(context, color_ref);
+        CGContextSetStrokeColorWithColor(context, color_ref);
     }
 
     if glow {
-        let color_ref = unsafe { CGColorCreateSRGB(r, g, b, 1.0) };
-        if !color_ref.is_null() {
+        let shadow_color = Color {
+            alpha: 1.0,
+            ..color.clone()
+        };
+        if let Some(shadow_color_ref) = unsafe { create_cg_color(&shadow_color) } {
             unsafe {
-                CGContextSetShadowWithColor(context, CGSize::ZERO, 10.0, color_ref);
-                CGColorRelease(color_ref);
+                CGContextSetShadowWithColor(context, CGSize::ZERO, 10.0, shadow_color_ref);
+                CGColorRelease(shadow_color_ref);
             }
         }
+    }
+    unsafe {
+        CGColorRelease(color_ref);
     }
 }
 
@@ -64,27 +51,6 @@ pub unsafe fn clip_between_rect_and_path(context: CGContextRef, frame: CGRect, p
         CGContextAddPath(context, clip_path);
         CGContextEOClip(context);
         CFRelease(clip_path.cast_const());
-    }
-}
-
-pub unsafe fn draw_square_with_inset(context: CGContextRef, rect: CGRect, inset: f64) {
-    unsafe {
-        add_rect_with_inset(context, rect, inset);
-        CGContextFillPath(context);
-    }
-}
-
-pub unsafe fn draw_square_gradient_with_inset(
-    context: CGContextRef,
-    gradient: CGGradientRef,
-    direction: [CGPoint; 2],
-    rect: CGRect,
-    inset: f64,
-) {
-    unsafe {
-        add_rect_with_inset(context, rect, inset);
-        CGContextClip(context);
-        CGContextDrawLinearGradient(context, gradient, direction[0], direction[1], 0);
     }
 }
 
@@ -119,15 +85,6 @@ pub unsafe fn draw_rounded_gradient_with_inset(
     }
 }
 
-pub unsafe fn draw_filled_path(context: CGContextRef, path: CGPathRef, color: u32) {
-    unsafe {
-        set_fill(context, color);
-        set_stroke(context, 0);
-        CGContextAddPath(context, path);
-        CGContextFillPath(context);
-    }
-}
-
 pub unsafe fn create_gradient(
     style: &ColorStyle,
     transform: CGAffineTransform,
@@ -136,14 +93,14 @@ pub unsafe fn create_gradient(
         return None;
     };
 
-    let (a1, r1, g1, b1) = colors_from_hex(gradient.color1);
-    let (a2, r2, g2, b2) = colors_from_hex(gradient.color2);
-    let colors: [CGColorRef; 2] = unsafe {
-        [
-            CGColorCreateSRGB(r1, g1, b1, a1),
-            CGColorCreateSRGB(r2, g2, b2, a2),
-        ]
+    let color1 = unsafe { create_cg_color(&gradient.color1)? };
+    let Some(color2) = (unsafe { create_cg_color(&gradient.color2) }) else {
+        unsafe {
+            CGColorRelease(color1);
+        }
+        return None;
     };
+    let colors = [color1, color2];
     if colors.iter().any(|color| color.is_null()) {
         for color in colors {
             if !color.is_null() {
@@ -175,9 +132,17 @@ pub unsafe fn create_gradient(
         }
     };
 
+    let Some(color_space) = (unsafe { create_cg_color_space(gradient_space(style)) }) else {
+        unsafe {
+            CGColorRelease(colors[0]);
+            CGColorRelease(colors[1]);
+        }
+        return None;
+    };
     let gradient_ref =
-        unsafe { CGGradientCreateWithColors(ptr::null(), cf_colors.as_raw(), ptr::null()) };
+        unsafe { CGGradientCreateWithColors(color_space, cf_colors.as_raw(), ptr::null()) };
     unsafe {
+        CGColorSpaceRelease(color_space);
         CGColorRelease(colors[0]);
         CGColorRelease(colors[1]);
     }
@@ -205,14 +170,35 @@ pub unsafe fn release_gradient(gradient: CGGradientRef) {
     }
 }
 
-unsafe fn add_rect_with_inset(context: CGContextRef, rect: CGRect, inset: f64) {
-    let square_rect = rect.inset(inset, inset);
-    let square_path = unsafe { CGPathCreateWithRect(square_rect, ptr::null()) };
-    if !square_path.is_null() {
-        unsafe {
-            CGContextAddPath(context, square_path);
-            CFRelease(square_path.cast_const());
-        }
+unsafe fn create_cg_color(color: &Color) -> Option<CGColorRef> {
+    let color_space = unsafe { create_cg_color_space(color.space)? };
+    let components = [color.red, color.green, color.blue, color.alpha];
+    let color_ref = unsafe { CGColorCreate(color_space, components.as_ptr()) };
+    unsafe {
+        CGColorSpaceRelease(color_space);
+    }
+    (!color_ref.is_null()).then_some(color_ref)
+}
+
+unsafe fn create_cg_color_space(space: ColorSpace) -> Option<CGColorSpaceRef> {
+    let name = match space {
+        ColorSpace::Srgb => unsafe { kCGColorSpaceSRGB },
+        ColorSpace::DisplayP3 => unsafe { kCGColorSpaceDisplayP3 },
+    };
+    let color_space = unsafe { CGColorSpaceCreateWithName(name) };
+    (!color_space.is_null()).then_some(color_space)
+}
+
+fn gradient_space(style: &ColorStyle) -> ColorSpace {
+    let ColorStyle::Gradient(gradient) = style else {
+        return ColorSpace::Srgb;
+    };
+    if gradient.color1.space == ColorSpace::DisplayP3
+        || gradient.color2.space == ColorSpace::DisplayP3
+    {
+        ColorSpace::DisplayP3
+    } else {
+        ColorSpace::Srgb
     }
 }
 
@@ -230,12 +216,6 @@ unsafe fn add_rounded_rect(context: CGContextRef, rect: CGRect, border_radius: f
 pub unsafe fn new_mutable_path() -> Option<CGMutablePathRef> {
     let path = unsafe { CGPathCreateMutable() };
     (!path.is_null()).then_some(path)
-}
-
-pub unsafe fn add_rect(path: CGMutablePathRef, rect: CGRect) {
-    unsafe {
-        CGPathAddRect(path, ptr::null(), rect);
-    }
 }
 
 pub unsafe fn add_rounded_rect_to_path(path: CGMutablePathRef, rect: CGRect, radius: f64) {

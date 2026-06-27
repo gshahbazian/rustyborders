@@ -1,10 +1,7 @@
 use std::ptr;
 
 use crate::drawing;
-use crate::settings::{
-    BORDER_ORDER_ABOVE, BORDER_PADDING, BORDER_STYLE_ROUND_UNIFORM, BORDER_STYLE_SQUARE,
-    BORDER_TSMN, ColorStyle, Settings, border_tsmw,
-};
+use crate::settings::{BORDER_ORDER_BELOW, BORDER_PADDING, ColorStyle, Settings};
 use crate::sys::cf::{
     CFDictionaryCreate, CFNumberCreate, CFRelease, CFTypeRef, K_CF_NUMBER_CFINDEX_TYPE, OwnedCf,
     cf_string,
@@ -116,15 +113,14 @@ impl Border {
         }
     }
 
-    pub fn unhide(&mut self, global_settings: &Settings) {
+    pub fn unhide(&mut self) {
         if self.too_small || (!self.sticky && !is_space_visible(self.cid, self.sid)) {
             return;
         }
 
-        let settings = self.settings(global_settings);
         if let Some(wid) = self.wid {
             unsafe {
-                SLSOrderWindow(self.cid, wid.0, settings.border_order, self.target_wid.0);
+                SLSOrderWindow(self.cid, wid.0, BORDER_ORDER_BELOW, self.target_wid.0);
             }
         }
     }
@@ -177,7 +173,7 @@ impl Border {
         );
 
         if self.wid.is_none() {
-            self.create_window(frame, settings.hidpi);
+            self.create_window(frame);
         }
 
         let Some(wid) = self.wid else {
@@ -237,15 +233,14 @@ impl Border {
             let level_err = SLSSetWindowLevel(self.cid, wid.0, level);
             let sublevel_err = SLSSetWindowSubLevel(self.cid, wid.0, sub_level);
             let alpha_err = SLSSetWindowAlpha(self.cid, wid.0, 1.0_f32);
-            let order_err =
-                SLSOrderWindow(self.cid, wid.0, settings.border_order, self.target_wid.0);
+            let order_err = SLSOrderWindow(self.cid, wid.0, BORDER_ORDER_BELOW, self.target_wid.0);
             let mut border_shown = false;
             let shown_err = SLSWindowIsOrderedIn(self.cid, wid.0, &mut border_shown);
             crate::rb_log!(
                 "window {}: direct border={} order={} move_err={} transform_err={} level_err={} sublevel_err={} alpha_err={} order_err={} shown_err={} border_shown={}",
                 self.target_wid,
                 wid,
-                settings.border_order,
+                BORDER_ORDER_BELOW,
                 move_err,
                 transform_err,
                 level_err,
@@ -308,8 +303,8 @@ impl Border {
             || smallest_rect.size.height < 2.0 * self.inner_radius
     }
 
-    fn create_window(&mut self, frame: CGRect, hidpi: bool) {
-        let wid = create_sls_window(self.cid, main_display_bounds(), self.origin, hidpi);
+    fn create_window(&mut self, frame: CGRect) {
+        let wid = create_sls_window(self.cid, main_display_bounds(), self.origin);
         let Some(wid) = wid else {
             crate::rb_log!(
                 "window {}: create_sls_window returned None frame={:?}",
@@ -394,7 +389,7 @@ impl Border {
             CGContextClearRect(self.context, main_display_bounds());
         }
 
-        let mut path_rect = effective_drawing_bounds;
+        let path_rect = effective_drawing_bounds;
         let Some(inner_clip_path) = (unsafe { drawing::new_mutable_path() }) else {
             unsafe {
                 CGContextRestoreGState(self.context);
@@ -402,99 +397,38 @@ impl Border {
             return;
         };
 
-        if settings.border_style == BORDER_STYLE_SQUARE
-            && settings.border_order == BORDER_ORDER_ABOVE
-            && settings.border_width >= border_tsmw()
-        {
-            path_rect = effective_drawing_bounds.inset(BORDER_TSMN, BORDER_TSMN);
-            unsafe {
-                drawing::add_rect(inner_clip_path, path_rect);
-            }
-        } else {
-            unsafe {
-                drawing::add_rounded_rect_to_path(
-                    inner_clip_path,
-                    path_rect.inset(1.0, 1.0),
-                    self.inner_radius,
-                );
-            }
+        unsafe {
+            drawing::add_rounded_rect_to_path(
+                inner_clip_path,
+                path_rect.inset(1.0, 1.0),
+                self.inner_radius,
+            );
         }
 
         unsafe {
             drawing::clip_between_rect_and_path(self.context, draw_frame, inner_clip_path.cast());
         }
 
-        if settings.border_style == BORDER_STYLE_SQUARE {
-            if let Some((gradient_ref, direction)) = gradient {
-                unsafe {
-                    drawing::draw_square_gradient_with_inset(
-                        self.context,
-                        gradient_ref,
-                        direction,
-                        path_rect,
-                        -settings.border_width / 2.0,
-                    );
-                    drawing::release_gradient(gradient_ref);
-                }
-            } else {
-                unsafe {
-                    drawing::draw_square_with_inset(
-                        self.context,
-                        path_rect,
-                        -settings.border_width / 2.0,
-                    );
-                }
+        let corner_radius = self.radius;
+        if let Some((gradient_ref, direction)) = gradient {
+            unsafe {
+                drawing::draw_rounded_gradient_with_inset(
+                    self.context,
+                    gradient_ref,
+                    direction,
+                    path_rect,
+                    corner_radius,
+                );
+                drawing::release_gradient(gradient_ref);
             }
         } else {
-            let corner_radius = if settings.border_style == BORDER_STYLE_ROUND_UNIFORM {
-                9.0
-            } else {
-                self.radius
-            };
-
-            if settings.border_style == BORDER_STYLE_ROUND_UNIFORM {
-                unsafe {
-                    drawing::draw_rounded_rect_with_inset(
-                        self.context,
-                        path_rect,
-                        corner_radius,
-                        true,
-                    );
-                }
-            }
-
-            if let Some((gradient_ref, direction)) = gradient {
-                unsafe {
-                    drawing::draw_rounded_gradient_with_inset(
-                        self.context,
-                        gradient_ref,
-                        direction,
-                        path_rect,
-                        corner_radius,
-                    );
-                    drawing::release_gradient(gradient_ref);
-                }
-            } else {
-                unsafe {
-                    drawing::draw_rounded_rect_with_inset(
-                        self.context,
-                        path_rect,
-                        corner_radius,
-                        false,
-                    );
-                }
-            }
-        }
-
-        if settings.show_background && settings.border_order != BORDER_ORDER_ABOVE {
             unsafe {
-                CGContextRestoreGState(self.context);
-                CGContextSaveGState(self.context);
-            }
-            if let Some(color) = settings.background.solid_color() {
-                unsafe {
-                    drawing::draw_filled_path(self.context, inner_clip_path.cast(), color);
-                }
+                drawing::draw_rounded_rect_with_inset(
+                    self.context,
+                    path_rect,
+                    corner_radius,
+                    false,
+                );
             }
         }
 
@@ -565,7 +499,7 @@ impl Drop for Border {
     }
 }
 
-fn create_sls_window(cid: i32, frame: CGRect, origin: CGPoint, hidpi: bool) -> Option<WindowId> {
+fn create_sls_window(cid: i32, frame: CGRect, origin: CGPoint) -> Option<WindowId> {
     let mut frame_region: CFTypeRef = ptr::null();
     let region_frame = frame;
     unsafe {
@@ -612,7 +546,7 @@ fn create_sls_window(cid: i32, frame: CGRect, origin: CGPoint, hidpi: bool) -> O
     }
 
     unsafe {
-        SLSSetWindowResolution(cid, id, if hidpi { 2.0 } else { 1.0 });
+        SLSSetWindowResolution(cid, id, 2.0);
         let shape_err = SLSSetWindowShape(
             cid,
             id,
