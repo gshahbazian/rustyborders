@@ -125,6 +125,7 @@ unsafe extern "C" {
     pub fn SLSWindowIteratorGetTags(iterator: CFTypeRef) -> u64;
     pub fn SLSWindowIteratorGetAttributes(iterator: CFTypeRef) -> u64;
     pub fn SLSWindowIteratorGetLevel(iterator: CFTypeRef) -> c_int;
+    pub fn SLSWindowIteratorGetCornerRadii(iterator: CFTypeRef) -> CFArrayRef;
 
     pub fn SLSCopyManagedDisplays(cid: c_int) -> CFArrayRef;
     pub fn SLSCopyManagedDisplaySpaces(cid: c_int) -> CFArrayRef;
@@ -133,8 +134,6 @@ unsafe extern "C" {
     pub fn SLSCopyActiveMenuBarDisplayIdentifier(cid: c_int) -> CFStringRef;
     pub fn SLSFlushWindowContentRegion(cid: c_int, wid: u32, dirty: *mut c_void) -> CGError;
 }
-
-pub type CornerRadiiFn = unsafe extern "C" fn(CFTypeRef) -> CFArrayRef;
 
 #[allow(dead_code)]
 pub fn _event_ref_type(_: CGEventRef) {}

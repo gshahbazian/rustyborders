@@ -99,6 +99,22 @@ unsafe extern "C" {
         corner_height: f64,
         transform: *const c_void,
     ) -> CGPathRef;
+    // Private CoreGraphics SPI that draws Tahoe-style continuous ("squircle")
+    // corners. Both symbols are exported from the CoreGraphics tbd stub and
+    // mirror the argument order of their non-continuous counterparts above.
+    pub fn CGPathAddContinuousRoundedRect(
+        path: CGMutablePathRef,
+        transform: *const c_void,
+        rect: CGRect,
+        corner_width: f64,
+        corner_height: f64,
+    );
+    pub fn CGPathCreateWithContinuousRoundedRect(
+        rect: CGRect,
+        corner_width: f64,
+        corner_height: f64,
+        transform: *const c_void,
+    ) -> CGPathRef;
 
     pub fn CGColorCreate(color_space: CGColorSpaceRef, components: *const f64) -> CGColorRef;
     pub fn CGColorRelease(color: CGColorRef);

@@ -74,10 +74,15 @@ that overlay. This differs slightly from JankyBorders' managed-window path
 because managed border windows did not visibly composite in this port during
 testing.
 
-Corner radii are read through the private
-`SLSWindowIteratorGetCornerRadii` symbol when available. The current drawing path
-uses the first returned radius and draws a uniform rounded rectangle, mirroring
-JankyBorders' scalar radius behavior.
+Corner radii are read through the private `SLSWindowIteratorGetCornerRadii`
+symbol. The drawing path uses the first returned radius and draws a continuous
+("squircle") rounded rectangle via the private
+`CGPathCreateWithContinuousRoundedRect` / `CGPathAddContinuousRoundedRect`
+CoreGraphics SPI, matching the corner shape macOS Tahoe uses for its own windows.
+
+rustyborders targets macOS Tahoe (macOS 26) and later. Both of the above private
+symbols are always present on those releases, so they are bound directly rather
+than resolved at runtime.
 
 ## Development
 

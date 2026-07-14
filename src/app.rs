@@ -1,10 +1,8 @@
 use std::collections::HashMap;
-use std::ffi::CString;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
-use libc::{RTLD_LAZY, RTLD_LOCAL, dlopen, dlsym};
 use thiserror::Error;
 
 use crate::border::Border;
@@ -18,15 +16,12 @@ use crate::sys::cf::{
 };
 use crate::sys::geometry::{SpaceId, WindowId};
 use crate::sys::mach::{MachPort, mach_task_self, pid_for_task};
-use crate::sys::skylight::{CornerRadiiFn, SLSMainConnectionID};
+use crate::sys::skylight::{SLSMainConnectionID, SLSWindowIteratorGetCornerRadii};
 use crate::windows;
 
 const VERSION: &str = "rustyborders-v0.1.0";
-const SKYLIGHT_PATH: &str = "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight";
-const CORNER_RADII_SYMBOL: &str = "SLSWindowIteratorGetCornerRadii";
 
 static APP: OnceLock<Mutex<App>> = OnceLock::new();
-static CORNER_RADII_FN: OnceLock<Option<CornerRadiiFn>> = OnceLock::new();
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -327,8 +322,6 @@ pub fn run(arguments: Vec<String>) -> Result<(), AppError> {
         return Err(AppError::AlreadyRunning);
     }
 
-    load_symbols();
-
     let mut pid = 0;
     unsafe {
         pid_for_task(mach_task_self(), &mut pid);
@@ -459,8 +452,7 @@ pub fn draw_borders_on_current_spaces() {
 }
 
 pub fn corner_radius_for_iterator(iterator: CFTypeRef) -> Option<f64> {
-    let function = CORNER_RADII_FN.get().copied().flatten()?;
-    let radii = unsafe { function(iterator) };
+    let radii = unsafe { SLSWindowIteratorGetCornerRadii(iterator) };
     let radii = unsafe { crate::sys::cf::OwnedCf::from_create_rule(radii) }?;
     if unsafe { CFArrayGetCount(radii.as_raw()) } <= 0 {
         return None;
@@ -489,27 +481,6 @@ fn with_app(function: impl FnOnce(&mut App)) {
             function(&mut app);
         }
     };
-}
-
-fn load_symbols() {
-    let path = CString::new(SKYLIGHT_PATH).expect("static path has no nul");
-    let symbol = CString::new(CORNER_RADII_SYMBOL).expect("static symbol has no nul");
-    let function = unsafe {
-        let lib = dlopen(path.as_ptr(), RTLD_LAZY | RTLD_LOCAL);
-        if lib.is_null() {
-            None
-        } else {
-            let symbol = dlsym(lib, symbol.as_ptr());
-            if symbol.is_null() {
-                None
-            } else {
-                Some(std::mem::transmute::<*mut std::ffi::c_void, CornerRadiiFn>(
-                    symbol,
-                ))
-            }
-        }
-    };
-    let _ = CORNER_RADII_FN.set(function);
 }
 
 fn execute_config_file(name: &str, filename: &str) {

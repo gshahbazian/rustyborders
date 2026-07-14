@@ -8,9 +8,9 @@ use crate::sys::os::{
     CGContextClip, CGContextDrawLinearGradient, CGContextEOClip, CGContextFillPath, CGContextRef,
     CGContextReplacePathWithStrokedPath, CGContextSetFillColorWithColor,
     CGContextSetShadowWithColor, CGContextSetStrokeColorWithColor, CGContextStrokePath,
-    CGGradientCreateWithColors, CGGradientRef, CGMutablePathRef, CGPathAddPath, CGPathAddRect,
-    CGPathAddRoundedRect, CGPathCreateMutable, CGPathCreateWithRoundedRect, CGPathRef,
-    kCGColorSpaceDisplayP3, kCGColorSpaceSRGB,
+    CGGradientCreateWithColors, CGGradientRef, CGMutablePathRef, CGPathAddContinuousRoundedRect,
+    CGPathAddPath, CGPathAddRect, CGPathCreateMutable, CGPathCreateWithContinuousRoundedRect,
+    CGPathRef, kCGColorSpaceDisplayP3, kCGColorSpaceSRGB,
 };
 use crate::sys::os::{CGColorRelease, CGColorSpaceRelease, CGGradientRelease};
 
@@ -203,8 +203,9 @@ fn gradient_space(style: &ColorStyle) -> ColorSpace {
 }
 
 unsafe fn add_rounded_rect(context: CGContextRef, rect: CGRect, border_radius: f64) {
-    let stroke_path =
-        unsafe { CGPathCreateWithRoundedRect(rect, border_radius, border_radius, ptr::null()) };
+    let stroke_path = unsafe {
+        CGPathCreateWithContinuousRoundedRect(rect, border_radius, border_radius, ptr::null())
+    };
     if !stroke_path.is_null() {
         unsafe {
             CGContextAddPath(context, stroke_path);
@@ -220,6 +221,6 @@ pub unsafe fn new_mutable_path() -> Option<CGMutablePathRef> {
 
 pub unsafe fn add_rounded_rect_to_path(path: CGMutablePathRef, rect: CGRect, radius: f64) {
     unsafe {
-        CGPathAddRoundedRect(path, ptr::null(), rect, radius, radius);
+        CGPathAddContinuousRoundedRect(path, ptr::null(), rect, radius, radius);
     }
 }
