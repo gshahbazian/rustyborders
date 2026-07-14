@@ -7,7 +7,7 @@ use crate::sys::cf::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryGetValue, CFNumberGetValue, CFTypeRef,
     K_CF_NUMBER_SINT64_TYPE, OwnedCf, cf_string, cfarray_of_u32, cfarray_of_u64,
 };
-use crate::sys::geometry::{SpaceId, WindowId};
+use crate::sys::geometry::{CGRect, SpaceId, WindowId};
 use crate::sys::mach::{
     MACH_MSG_TIMEOUT_NONE, MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MAKE_SEND_ONCE, MACH_PORT_NULL,
     MACH_RCV_MSG, MACH_RCV_SYNC_WAIT, MACH_SEND_MSG, MACH_SEND_PROPAGATE_QOS,
@@ -17,8 +17,9 @@ use crate::sys::mach::{
 use crate::sys::macho;
 use crate::sys::os::{
     _AXUIElementGetWindow, _SLPSGetFrontProcess, AXIsProcessTrusted, AXIsProcessTrustedWithOptions,
-    AXUIElementCopyAttributeValue, AXUIElementCreateApplication, CGDisplayCreateUUIDFromDisplayID,
-    CGGetActiveDisplayList, ProcessSerialNumber, proc_name,
+    AXUIElementCopyAttributeValue, AXUIElementCreateApplication, CGDisplayBounds,
+    CGDisplayCreateUUIDFromDisplayID, CGGetActiveDisplayList, K_CG_ERROR_SUCCESS,
+    ProcessSerialNumber, proc_name,
 };
 use crate::sys::skylight::{
     SLSConnectionGetPID, SLSCopyActiveMenuBarDisplayIdentifier, SLSCopyManagedDisplayForWindow,
@@ -311,6 +312,34 @@ pub fn get_active_space_id(cid: i32) -> SpaceId {
         return SpaceId(0);
     };
     SpaceId(unsafe { SLSManagedDisplayGetCurrentSpace(cid, uuid.as_raw()) })
+}
+
+pub fn active_display_bounds() -> Option<Vec<CGRect>> {
+    let mut count = 0_u32;
+    if unsafe { CGGetActiveDisplayList(0, ptr::null_mut(), &mut count) } != K_CG_ERROR_SUCCESS
+        || count == 0
+    {
+        return None;
+    }
+
+    let mut displays = vec![0_u32; count as usize];
+    let mut actual_count = 0_u32;
+    if unsafe { CGGetActiveDisplayList(count, displays.as_mut_ptr(), &mut actual_count) }
+        != K_CG_ERROR_SUCCESS
+    {
+        return None;
+    }
+    displays.truncate(actual_count.min(count) as usize);
+    if displays.is_empty() {
+        return None;
+    }
+
+    Some(
+        displays
+            .into_iter()
+            .map(|display| unsafe { CGDisplayBounds(display) })
+            .collect(),
+    )
 }
 
 pub fn is_space_visible(cid: i32, sid: SpaceId) -> bool {

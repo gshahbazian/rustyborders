@@ -6,7 +6,9 @@ use crate::sys::cf::{
     CFDictionaryCreate, CFNumberCreate, CFRelease, CFTypeRef, K_CF_NUMBER_CFINDEX_TYPE, OwnedCf,
     cf_string,
 };
-use crate::sys::geometry::{CGAffineTransform, CGPoint, CGRect, SpaceId, WindowId};
+use crate::sys::geometry::{
+    CGAffineTransform, CGPoint, CGRect, SpaceId, WindowId, is_more_than_half_visible,
+};
 use crate::sys::os::{
     CGContextClearRect, CGContextFlush, CGContextRef, CGContextRestoreGState, CGContextSaveGState,
     CGContextSetInterpolationQuality, CGContextSetLineWidth, CGDisplayBounds, CGMainDisplayID,
@@ -22,8 +24,8 @@ use crate::sys::skylight::{
     SLSWindowSetShadowProperties, SLSWindowThaw, SLWindowContextCreate,
 };
 use crate::windows::{
-    WINDOW_TAG_STICKY, is_space_visible, window_level, window_send_to_space, window_space_id,
-    window_sub_level, window_tags,
+    WINDOW_TAG_STICKY, active_display_bounds, is_space_visible, window_level, window_send_to_space,
+    window_space_id, window_sub_level, window_tags,
 };
 
 #[derive(Debug)]
@@ -96,10 +98,6 @@ impl Border {
         global_settings: &Settings,
         server_port: crate::sys::mach::MachPort,
     ) {
-        if self.wid.is_none() {
-            return;
-        }
-
         let settings = self.settings(global_settings).clone();
         self.needs_redraw = true;
         self.update_internal(&settings, server_port);
@@ -113,16 +111,9 @@ impl Border {
         }
     }
 
-    pub fn unhide(&mut self) {
-        if self.too_small || (!self.sticky && !is_space_visible(self.cid, self.sid)) {
-            return;
-        }
-
-        if let Some(wid) = self.wid {
-            unsafe {
-                SLSOrderWindow(self.cid, wid.0, BORDER_ORDER_BELOW, self.target_wid.0);
-            }
-        }
+    pub fn unhide(&mut self, global_settings: &Settings, server_port: crate::sys::mach::MachPort) {
+        self.needs_redraw = true;
+        self.update(global_settings, server_port);
     }
 
     fn update_internal(&mut self, settings: &Settings, server_port: crate::sys::mach::MachPort) {
@@ -139,6 +130,23 @@ impl Border {
             frame,
             self.origin
         );
+
+        match active_display_bounds() {
+            Some(displays) if !is_more_than_half_visible(self.target_bounds, &displays) => {
+                crate::rb_log!(
+                    "window {}: hiding border because at most half is visible on screen bounds={:?}",
+                    self.target_wid,
+                    self.target_bounds
+                );
+                self.hide();
+                return;
+            }
+            None => crate::rb_log!(
+                "window {}: unable to read active display bounds; skipping visibility check",
+                self.target_wid
+            ),
+            Some(_) => {}
+        }
 
         let tags = window_tags(self.cid, self.target_wid);
         self.sticky = tags & WINDOW_TAG_STICKY != 0;

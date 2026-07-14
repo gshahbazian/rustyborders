@@ -98,6 +98,85 @@ impl CGRect {
             },
         }
     }
+
+    pub fn intersection(self, other: Self) -> Option<Self> {
+        let min_x = self.origin.x.max(other.origin.x);
+        let min_y = self.origin.y.max(other.origin.y);
+        let max_x = (self.origin.x + self.size.width).min(other.origin.x + other.size.width);
+        let max_y = (self.origin.y + self.size.height).min(other.origin.y + other.size.height);
+
+        (max_x > min_x && max_y > min_y).then_some(Self {
+            origin: CGPoint { x: min_x, y: min_y },
+            size: CGSize {
+                width: max_x - min_x,
+                height: max_y - min_y,
+            },
+        })
+    }
+
+    pub fn area(self) -> f64 {
+        if self.size.width <= 0.0 || self.size.height <= 0.0 {
+            return 0.0;
+        }
+        self.size.width * self.size.height
+    }
+}
+
+pub fn is_more_than_half_visible(window: CGRect, displays: &[CGRect]) -> bool {
+    let window_area = window.area();
+    if window_area == 0.0 {
+        return false;
+    }
+
+    let intersections = displays
+        .iter()
+        .filter_map(|display| window.intersection(*display))
+        .collect::<Vec<_>>();
+    let mut x_coordinates = intersections
+        .iter()
+        .flat_map(|rect| [rect.origin.x, rect.origin.x + rect.size.width])
+        .collect::<Vec<_>>();
+    x_coordinates.sort_by(f64::total_cmp);
+    x_coordinates.dedup();
+
+    let mut visible_area = 0.0;
+    for x_pair in x_coordinates.windows(2) {
+        let [min_x, max_x] = x_pair else {
+            continue;
+        };
+        if max_x <= min_x {
+            continue;
+        }
+
+        let mut y_intervals = intersections
+            .iter()
+            .filter(|rect| rect.origin.x < *max_x && rect.origin.x + rect.size.width > *min_x)
+            .map(|rect| (rect.origin.y, rect.origin.y + rect.size.height))
+            .collect::<Vec<_>>();
+        y_intervals.sort_by(|left, right| left.0.total_cmp(&right.0));
+
+        let mut covered_height = 0.0;
+        let mut current_interval: Option<(f64, f64)> = None;
+        for (min_y, max_y) in y_intervals {
+            match current_interval {
+                Some((current_min, current_max)) if min_y <= current_max => {
+                    current_interval = Some((current_min, current_max.max(max_y)));
+                }
+                Some((current_min, current_max)) => {
+                    covered_height += current_max - current_min;
+                    current_interval = Some((min_y, max_y));
+                }
+                None => current_interval = Some((min_y, max_y)),
+            }
+        }
+        if let Some((min_y, max_y)) = current_interval {
+            covered_height += max_y - min_y;
+        }
+
+        visible_area += (max_x - min_x) * covered_height;
+    }
+
+    visible_area * 2.0 > window_area
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -122,11 +201,58 @@ impl fmt::Display for SpaceId {
 mod tests {
     use super::*;
 
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
+        CGRect {
+            origin: CGPoint { x, y },
+            size: CGSize { width, height },
+        }
+    }
+
     #[test]
     fn core_graphics_geometry_layout_matches_64_bit_abi() {
         assert_eq!(std::mem::size_of::<CGPoint>(), 16);
         assert_eq!(std::mem::size_of::<CGSize>(), 16);
         assert_eq!(std::mem::size_of::<CGRect>(), 32);
         assert_eq!(std::mem::size_of::<CGAffineTransform>(), 48);
+    }
+
+    #[test]
+    fn visibility_requires_strictly_more_than_half_the_window() {
+        let display = rect(0.0, 0.0, 100.0, 100.0);
+
+        assert!(is_more_than_half_visible(
+            rect(10.0, 10.0, 50.0, 50.0),
+            &[display]
+        ));
+        assert!(!is_more_than_half_visible(
+            rect(95.0, 95.0, 100.0, 100.0),
+            &[display]
+        ));
+        assert!(!is_more_than_half_visible(
+            rect(50.0, 0.0, 100.0, 100.0),
+            &[display]
+        ));
+        assert!(is_more_than_half_visible(
+            rect(49.0, 0.0, 100.0, 100.0),
+            &[display]
+        ));
+    }
+
+    #[test]
+    fn visibility_uses_the_union_of_all_displays() {
+        let displays = [rect(0.0, 0.0, 100.0, 100.0), rect(100.0, 0.0, 100.0, 100.0)];
+        assert!(is_more_than_half_visible(
+            rect(50.0, 0.0, 100.0, 100.0),
+            &displays
+        ));
+    }
+
+    #[test]
+    fn overlapping_display_bounds_are_not_counted_twice() {
+        let display = rect(0.0, 0.0, 40.0, 100.0);
+        assert!(!is_more_than_half_visible(
+            rect(0.0, 0.0, 100.0, 100.0),
+            &[display, display]
+        ));
     }
 }

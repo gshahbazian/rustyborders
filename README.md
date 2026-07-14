@@ -39,7 +39,8 @@ Useful options currently include:
 - `apply-to=<window_id>`
 
 Borders are always rendered in HiDPI using the built-in style, order, background,
-and focus-detection defaults.
+and focus-detection defaults. A border is shown only when more than half of its
+target window is within the combined bounds of the active displays.
 
 Color values accept legacy `0xAARRGGBB`, `#RRGGBB`, `#AARRGGBB`, CSS
 `color(srgb ...)`, CSS `color(display-p3 ...)`, and `oklch(...)`. OKLCH colors

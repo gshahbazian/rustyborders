@@ -429,7 +429,7 @@ pub fn handle_window_unhide(wid: WindowId, cid: i32) {
             return;
         }
         if let Some(border) = app.windows.get_mut(&wid) {
-            border.unhide();
+            border.unhide(&app.settings, app.server_port);
         }
     });
 }
