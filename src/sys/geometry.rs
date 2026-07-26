@@ -50,6 +50,20 @@ impl CGAffineTransform {
         }
     }
 
+    /// A CGS window transform maps screen space into the window's space, so the
+    /// content is composited at `(-tx, -ty)`. Translating by `-origin` therefore
+    /// places window-local content at `origin` on the desktop.
+    pub const fn translation(tx: f64, ty: f64) -> Self {
+        Self {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            tx,
+            ty,
+        }
+    }
+
     pub const fn scale(width: f64, height: f64) -> Self {
         Self {
             a: width,

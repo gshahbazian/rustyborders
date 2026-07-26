@@ -11,8 +11,8 @@ use crate::sys::geometry::{
 };
 use crate::sys::os::{
     CGContextClearRect, CGContextFlush, CGContextRef, CGContextRestoreGState, CGContextSaveGState,
-    CGContextSetInterpolationQuality, CGContextSetLineWidth, CGDisplayBounds, CGMainDisplayID,
-    K_CG_BACKING_STORE_BUFFERED, K_CG_INTERPOLATION_NONE,
+    CGContextSetInterpolationQuality, CGContextSetLineWidth, K_CG_BACKING_STORE_BUFFERED,
+    K_CG_INTERPOLATION_NONE,
 };
 use crate::sys::skylight::{
     CGRegionCreateEmptyRegion, CGSNewRegionWithRect, SLSClearWindowTags, SLSDisableUpdate,
@@ -43,6 +43,11 @@ pub struct Border {
     pub origin: CGPoint,
     pub frame: CGRect,
     pub target_bounds: CGRect,
+    /// The target window's rect expressed in the border window's own coordinate
+    /// space: inset from `frame` by the border width plus padding on all four
+    /// sides. Everything is drawn in this space, which is why the border needs
+    /// no knowledge of which display the target is on.
+    pub drawing_bounds: CGRect,
     pub context: CGContextRef,
     pub setting_override: Option<Settings>,
 }
@@ -74,6 +79,7 @@ impl Border {
             origin: CGPoint::ZERO,
             frame: CGRect::ZERO,
             target_bounds: CGRect::ZERO,
+            drawing_bounds: CGRect::ZERO,
             context: ptr::null_mut(),
             setting_override: None,
         }
@@ -193,23 +199,7 @@ impl Border {
             unsafe {
                 SLSDisableUpdate(self.cid);
             }
-            let mut frame_region: CFTypeRef = ptr::null();
-            unsafe {
-                CGSNewRegionWithRect(&frame, &mut frame_region);
-            }
-            if !frame_region.is_null() {
-                unsafe {
-                    SLSWindowFreezeWithOptions(self.cid, wid.0, ptr::null());
-                    SLSSetWindowShape(
-                        self.cid,
-                        wid.0,
-                        self.origin.x as f32,
-                        self.origin.y as f32,
-                        frame_region,
-                    );
-                    CFRelease(frame_region);
-                }
-            }
+            self.reshape(wid, frame);
             self.needs_redraw = true;
             self.frame = frame;
             true
@@ -233,10 +223,13 @@ impl Border {
 
         unsafe {
             let move_err = SLSMoveWindow(self.cid, wid.0, std::ptr::addr_of!(self.origin));
+            // Positions the window-local content at `origin` on the desktop.
+            // `origin` is a global coordinate and may be negative, which is what
+            // lets borders land on displays left of or above the main one.
             let transform_err = crate::sys::skylight::SLSSetWindowTransform(
                 self.cid,
                 wid.0,
-                CGAffineTransform::identity(),
+                CGAffineTransform::translation(-self.origin.x, -self.origin.y),
             );
             let level_err = SLSSetWindowLevel(self.cid, wid.0, level);
             let sublevel_err = SLSSetWindowSubLevel(self.cid, wid.0, sub_level);
@@ -302,6 +295,14 @@ impl Border {
         self.origin = frame.origin;
         frame.origin = CGPoint::ZERO;
 
+        self.drawing_bounds = CGRect {
+            origin: CGPoint {
+                x: -border_offset,
+                y: -border_offset,
+            },
+            size: window_frame.size,
+        };
+
         Some(frame)
     }
 
@@ -311,8 +312,40 @@ impl Border {
             || smallest_rect.size.height < 2.0 * self.inner_radius
     }
 
+    fn reshape(&mut self, wid: WindowId, frame: CGRect) {
+        let mut region: CFTypeRef = ptr::null();
+        unsafe {
+            CGSNewRegionWithRect(&frame, &mut region);
+        }
+        if region.is_null() {
+            crate::rb_log!(
+                "window {}: failed to build shape region for {frame:?}",
+                self.target_wid
+            );
+            return;
+        }
+
+        unsafe {
+            SLSWindowFreezeWithOptions(self.cid, wid.0, ptr::null());
+            let err = SLSSetWindowShape(
+                self.cid,
+                wid.0,
+                frame.origin.x as f32,
+                frame.origin.y as f32,
+                region,
+            );
+            CFRelease(region);
+            if err != 0 {
+                crate::rb_log!(
+                    "window {}: SLSSetWindowShape failed err={err}",
+                    self.target_wid
+                );
+            }
+        }
+    }
+
     fn create_window(&mut self, frame: CGRect) {
-        let wid = create_sls_window(self.cid, main_display_bounds(), self.origin);
+        let wid = create_sls_window(self.cid, frame);
         let Some(wid) = wid else {
             crate::rb_log!(
                 "window {}: create_sls_window returned None frame={:?}",
@@ -386,18 +419,12 @@ impl Border {
             None
         };
 
-        let draw_frame = flip_rect_for_context(CGRect {
-            origin: self.origin,
-            size: frame.size,
-        });
-        let effective_drawing_bounds = flip_rect_for_context(self.target_bounds);
-
         unsafe {
             CGContextSetLineWidth(self.context, settings.border_width);
-            CGContextClearRect(self.context, main_display_bounds());
+            CGContextClearRect(self.context, frame);
         }
 
-        let path_rect = effective_drawing_bounds;
+        let path_rect = self.drawing_bounds;
         let Some(inner_clip_path) = (unsafe { drawing::new_mutable_path() }) else {
             unsafe {
                 CGContextRestoreGState(self.context);
@@ -414,7 +441,7 @@ impl Border {
         }
 
         unsafe {
-            drawing::clip_between_rect_and_path(self.context, draw_frame, inner_clip_path.cast());
+            drawing::clip_between_rect_and_path(self.context, frame, inner_clip_path.cast());
         }
 
         let corner_radius = self.radius;
@@ -481,21 +508,6 @@ impl Border {
     }
 }
 
-fn main_display_bounds() -> CGRect {
-    unsafe { CGDisplayBounds(CGMainDisplayID()) }
-}
-
-fn flip_rect_for_context(rect: CGRect) -> CGRect {
-    let display = main_display_bounds();
-    CGRect {
-        origin: CGPoint {
-            x: rect.origin.x,
-            y: display.size.height - (rect.origin.y + rect.size.height),
-        },
-        size: rect.size,
-    }
-}
-
 impl Drop for Border {
     fn drop(&mut self) {
         self.destroy_window();
@@ -507,13 +519,15 @@ impl Drop for Border {
     }
 }
 
-fn create_sls_window(cid: i32, frame: CGRect, origin: CGPoint) -> Option<WindowId> {
+/// Creates the border window. `frame` is its shape and the coordinate space
+/// drawing happens in; the window is placed on the desktop by the caller's
+/// move + transform.
+fn create_sls_window(cid: i32, frame: CGRect) -> Option<WindowId> {
     let mut frame_region: CFTypeRef = ptr::null();
-    let region_frame = frame;
     unsafe {
-        let err = CGSNewRegionWithRect(&region_frame, &mut frame_region);
+        let err = CGSNewRegionWithRect(&frame, &mut frame_region);
         if err != 0 {
-            crate::rb_log!("CGSNewRegionWithRect failed err={err} frame={region_frame:?}");
+            crate::rb_log!("CGSNewRegionWithRect failed err={err} frame={frame:?}");
         }
     }
     if frame_region.is_null() {
@@ -525,7 +539,7 @@ fn create_sls_window(cid: i32, frame: CGRect, origin: CGPoint) -> Option<WindowI
     let mut set_tags = (1_u64 << 1) | (1_u64 << 9);
     let mut clear_tags = 0_u64;
 
-    crate::rb_log!("creating border overlay window frame={frame:?} origin={origin:?}");
+    crate::rb_log!("creating border window frame={frame:?}");
     let empty_region = unsafe { CGRegionCreateEmptyRegion() };
     let empty_region = (unsafe { OwnedCf::from_create_rule(empty_region) })?;
     unsafe {
@@ -558,14 +572,12 @@ fn create_sls_window(cid: i32, frame: CGRect, origin: CGPoint) -> Option<WindowI
         let shape_err = SLSSetWindowShape(
             cid,
             id,
-            origin.x as f32,
-            origin.y as f32,
+            frame.origin.x as f32,
+            frame.origin.y as f32,
             frame_region.as_raw(),
         );
         if shape_err != 0 {
-            crate::rb_log!(
-                "SLSSetWindowShape initial failed err={shape_err} wid={id} origin={origin:?}"
-            );
+            crate::rb_log!("SLSSetWindowShape initial failed err={shape_err} wid={id}");
         }
         SLSSetWindowTags(cid, id, &mut set_tags, 64);
         SLSClearWindowTags(cid, id, &mut clear_tags, 64);

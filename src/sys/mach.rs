@@ -85,13 +85,23 @@ pub const NDR_RECORD: NdrRecord = NdrRecord {
     reserved2: 0,
 };
 
+pub const MACH_MSGH_BITS_LOCAL_MASK: MachMsgBits = 0x0000_ff00;
+pub const MACH_MSGH_BITS_VOUCHER_MASK: MachMsgBits = 0x00ff_0000;
+pub const MACH_MSGH_BITS_PORTS_MASK: MachMsgBits =
+    MACH_MSGH_BITS_REMOTE_MASK | MACH_MSGH_BITS_LOCAL_MASK | MACH_MSGH_BITS_VOUCHER_MASK;
+
+/// Mirrors `MACH_MSGH_BITS_SET`: the port fields are masked into their own
+/// bytes and `other` may only contribute bits outside the port fields.
 pub const fn mach_msg_bits(
     remote: MachMsgBits,
     local: MachMsgBits,
     voucher: MachMsgBits,
     other: MachMsgBits,
 ) -> MachMsgBits {
-    remote | (local << 8) | (voucher << 16) | other
+    (remote & MACH_MSGH_BITS_REMOTE_MASK)
+        | ((local << 8) & MACH_MSGH_BITS_LOCAL_MASK)
+        | ((voucher << 16) & MACH_MSGH_BITS_VOUCHER_MASK)
+        | (other & !MACH_MSGH_BITS_PORTS_MASK)
 }
 
 #[link(name = "System", kind = "dylib")]
@@ -168,5 +178,25 @@ mod tests {
         assert_eq!(std::mem::offset_of!(MachMsgOolDescriptor, size), 12);
 
         assert_eq!(std::mem::size_of::<NdrRecord>(), 8);
+    }
+
+    #[test]
+    fn msgh_bits_keeps_other_out_of_the_port_fields() {
+        // The sublevel request passes MACH_MSGH_BITS_REMOTE_MASK as `other`;
+        // leaving it unmasked would overwrite the remote port type with 0xff
+        // and the send fails with MACH_SEND_INVALID_HEADER.
+        assert_eq!(
+            mach_msg_bits(
+                MACH_MSG_TYPE_COPY_SEND,
+                MACH_MSG_TYPE_MAKE_SEND_ONCE,
+                0,
+                MACH_MSGH_BITS_REMOTE_MASK,
+            ),
+            0x1513
+        );
+        assert_eq!(
+            mach_msg_bits(MACH_MSG_TYPE_COPY_SEND, 0, 0, MACH_MSGH_BITS_COMPLEX),
+            0x8000_0013
+        );
     }
 }

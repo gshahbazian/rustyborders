@@ -145,8 +145,11 @@ pub fn window_sub_level(server_port: crate::sys::mach::MachPort, wid: WindowId) 
         return 0;
     };
 
-    let request = 0x73c3;
-    let response = 0x7427;
+    // SkyLight's sublevel MIG routine was renumbered in macOS 26; the pre-26
+    // pair (0x73c3/0x7427) answers with MIG_BAD_ID there. rustyborders targets
+    // macOS 26 and later, so only the current numbers are used.
+    let request = 0x76e3;
+    let response = 0x7747;
 
     #[repr(C, packed(2))]
     struct Message {
@@ -216,6 +219,7 @@ pub fn window_sub_level(server_port: crate::sys::mach::MachPort, wid: WindowId) 
     };
 
     if error != crate::sys::mach::KERN_SUCCESS {
+        crate::rb_log!("sublevel: mach_msg failed err={error:#x}");
         unsafe {
             mig_dealloc_special_reply_port(message.info.header.msgh_local_port);
         }
@@ -223,9 +227,20 @@ pub fn window_sub_level(server_port: crate::sys::mach::MachPort, wid: WindowId) 
     }
 
     if message.info.header.msgh_id != response {
+        let reply_id = message.info.header.msgh_id;
+        crate::rb_log!("sublevel: unexpected reply id={reply_id:#x} (expected {response:#x})");
         unsafe {
             crate::sys::mach::mach_msg_destroy(std::ptr::addr_of_mut!(message.info.header));
         }
+        return 0;
+    }
+
+    // A MIG error reply carries only a RetCode where the request kept its
+    // payload, and leaves the sub_level slot untouched. Reject those instead of
+    // reporting stale stack data as a sublevel.
+    let ret_code = message.payload.wid;
+    if ret_code != 0 {
+        crate::rb_log!("sublevel: reply carried mig error ret_code={ret_code}");
         return 0;
     }
 

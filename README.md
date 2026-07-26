@@ -69,11 +69,27 @@ The code is organized around a few core modules:
   instance.
 - `src/sys/*` contains the low-level FFI declarations and ABI-sensitive structs.
 
-The compositor path uses `SLSNewWindowWithOpaqueShapeAndContext` to create a
-fullscreen overlay window. Borders are drawn in absolute display coordinates into
-that overlay. This differs slightly from JankyBorders' managed-window path
-because managed border windows did not visibly composite in this port during
-testing.
+The compositor path uses `SLSNewWindowWithOpaqueShapeAndContext` rather than
+JankyBorders' managed `SLSNewWindow`, because managed border windows did not
+visibly composite in this port during testing. The geometry, however, is
+JankyBorders': each border window is sized to the border frame, and drawing
+happens in **window-local** coordinates via `Border::drawing_bounds` — the target
+window's rect inset by the border width plus padding on all four sides.
+
+The border window is placed on the desktop by
+`SLSSetWindowTransform(cid, wid, translate(-origin))`. A CGS window transform maps
+screen space into window space, so translating by `-origin` composites the content
+at `origin`. This is the part that makes multiple displays work: `origin` is a
+global desktop coordinate, and displays arranged left of or above the main one
+have negative coordinates, which the transform handles naturally.
+
+The trap to avoid: with an **identity** transform the window's content composites
+at the global origin instead, which makes it look like the border must be drawn in
+absolute display coordinates inside a display-sized overlay. That appears to work
+on a single display and then breaks — the border is clipped out of existence as
+soon as the overlay is reshaped, and it can never reach a display at negative
+coordinates. `SLSSetWindowShape`'s `x`/`y` arguments are also ignored for this
+window type; only the region's size takes effect.
 
 Corner radii are read through the private `SLSWindowIteratorGetCornerRadii`
 symbol. The drawing path uses the first returned radius and draws a continuous
