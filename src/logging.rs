@@ -1,4 +1,12 @@
 use std::sync::OnceLock;
+use std::time::Instant;
+
+/// Milliseconds since the first log call. Timing is what distinguishes a
+/// transient glitch from a real user action in the event log.
+pub fn elapsed_ms() -> u128 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis()
+}
 
 pub fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -16,7 +24,11 @@ pub fn enabled() -> bool {
 macro_rules! rb_log {
     ($($arg:tt)*) => {
         if $crate::logging::enabled() {
-            eprintln!("[rustyborders] {}", format_args!($($arg)*));
+            eprintln!(
+                "[rustyborders +{:>7}ms] {}",
+                $crate::logging::elapsed_ms(),
+                format_args!($($arg)*)
+            );
         }
     };
 }

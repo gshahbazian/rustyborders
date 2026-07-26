@@ -35,6 +35,9 @@ pub struct Border {
     pub needs_redraw: bool,
     pub too_small: bool,
     pub sticky: bool,
+    /// Whether the border window is currently ordered in. The cheap move path is
+    /// only valid while it is, since that path never orders the window in.
+    pub ordered_in: bool,
     pub sid: SpaceId,
     pub wid: Option<WindowId>,
     pub target_wid: WindowId,
@@ -71,6 +74,7 @@ impl Border {
             needs_redraw: true,
             too_small: false,
             sticky: false,
+            ordered_in: false,
             sid: SpaceId(0),
             wid: None,
             target_wid: WindowId(0),
@@ -99,14 +103,56 @@ impl Border {
         self.update_internal(&settings, server_port);
     }
 
+    /// Handles `EVENT_WINDOW_MOVE`, the hot path while a window is dragged.
+    ///
+    /// A pure move leaves the border's pixels untouched — the content is drawn in
+    /// window-local coordinates, so only the placement transform changes. That
+    /// makes the queries and the full redraw unnecessary; anything else (a resize
+    /// arriving as a move, a hidden border, a width change) falls back to the
+    /// full update.
     pub fn move_border(
         &mut self,
         global_settings: &Settings,
         server_port: crate::sys::mach::MachPort,
     ) {
         let settings = self.settings(global_settings).clone();
-        self.needs_redraw = true;
-        self.update_internal(&settings, server_port);
+
+        let Some(wid) = self.wid.filter(|_| self.ordered_in && !self.too_small) else {
+            self.needs_redraw = true;
+            self.update_internal(&settings, server_port);
+            return;
+        };
+
+        let mut window_frame = CGRect::ZERO;
+        unsafe {
+            SLSGetWindowBounds(self.cid, self.target_wid.0, &mut window_frame);
+        }
+
+        let border_offset = -settings.border_width - BORDER_PADDING;
+        let expected_frame = CGRect {
+            origin: CGPoint::ZERO,
+            size: window_frame.inset(border_offset, border_offset).size,
+        };
+        if expected_frame != self.frame {
+            self.needs_redraw = true;
+            self.update_internal(&settings, server_port);
+            return;
+        }
+
+        if let Some(displays) = active_display_bounds()
+            && !is_more_than_half_visible(window_frame, &displays)
+        {
+            self.target_bounds = window_frame;
+            self.hide();
+            return;
+        }
+
+        self.target_bounds = window_frame;
+        self.origin = CGPoint {
+            x: window_frame.origin.x + border_offset,
+            y: window_frame.origin.y + border_offset,
+        };
+        self.commit_placement(wid, None);
     }
 
     pub fn hide(&mut self) {
@@ -114,6 +160,7 @@ impl Border {
             unsafe {
                 SLSOrderWindow(self.cid, wid.0, 0, self.target_wid.0);
             }
+            self.ordered_in = false;
         }
     }
 
@@ -212,6 +259,10 @@ impl Border {
         }
 
         if !self.focused && !settings.inactive_border_visible() {
+            crate::rb_log!(
+                "window {}: hiding border because it is unfocused and the inactive color is invisible",
+                self.target_wid
+            );
             self.hide();
             if disabled_update {
                 unsafe {
@@ -221,37 +272,7 @@ impl Border {
             return;
         }
 
-        unsafe {
-            let move_err = SLSMoveWindow(self.cid, wid.0, std::ptr::addr_of!(self.origin));
-            // Positions the window-local content at `origin` on the desktop.
-            // `origin` is a global coordinate and may be negative, which is what
-            // lets borders land on displays left of or above the main one.
-            let transform_err = crate::sys::skylight::SLSSetWindowTransform(
-                self.cid,
-                wid.0,
-                CGAffineTransform::translation(-self.origin.x, -self.origin.y),
-            );
-            let level_err = SLSSetWindowLevel(self.cid, wid.0, level);
-            let sublevel_err = SLSSetWindowSubLevel(self.cid, wid.0, sub_level);
-            let alpha_err = SLSSetWindowAlpha(self.cid, wid.0, 1.0_f32);
-            let order_err = SLSOrderWindow(self.cid, wid.0, BORDER_ORDER_BELOW, self.target_wid.0);
-            let mut border_shown = false;
-            let shown_err = SLSWindowIsOrderedIn(self.cid, wid.0, &mut border_shown);
-            crate::rb_log!(
-                "window {}: direct border={} order={} move_err={} transform_err={} level_err={} sublevel_err={} alpha_err={} order_err={} shown_err={} border_shown={}",
-                self.target_wid,
-                wid,
-                BORDER_ORDER_BELOW,
-                move_err,
-                transform_err,
-                level_err,
-                sublevel_err,
-                alpha_err,
-                order_err,
-                shown_err,
-                border_shown
-            );
-        }
+        self.commit_placement(wid, Some((level, sub_level)));
 
         let mut set_tags = (1_u64 << 1) | (1_u64 << 9);
         let mut clear_tags = 0_u64;
@@ -310,6 +331,72 @@ impl Border {
         let smallest_rect = window_frame.inset(1.0, 1.0);
         smallest_rect.size.width < 2.0 * self.inner_radius
             || smallest_rect.size.height < 2.0 * self.inner_radius
+    }
+
+    /// Applies position (and optionally level/sublevel/order) in one atomic
+    /// compositor transaction.
+    ///
+    /// These used to be issued as separate `SLS*` calls, which let the
+    /// compositor present a frame with the new position but the previous
+    /// transform — a visible flash while a window was being resized, since the
+    /// transform is what places the content.
+    fn commit_placement(&mut self, wid: WindowId, ordering: Option<(i32, i32)>) {
+        let transform = CGAffineTransform::translation(-self.origin.x, -self.origin.y);
+        let transaction = unsafe { crate::sys::skylight::SLSTransactionCreate(self.cid) };
+        if transaction.is_null() {
+            crate::rb_log!(
+                "window {}: SLSTransactionCreate failed; applying placement directly",
+                self.target_wid
+            );
+            unsafe {
+                SLSMoveWindow(self.cid, wid.0, std::ptr::addr_of!(self.origin));
+                crate::sys::skylight::SLSSetWindowTransform(self.cid, wid.0, transform);
+                if let Some((level, sub_level)) = ordering {
+                    SLSSetWindowLevel(self.cid, wid.0, level);
+                    SLSSetWindowSubLevel(self.cid, wid.0, sub_level);
+                    SLSOrderWindow(self.cid, wid.0, BORDER_ORDER_BELOW, self.target_wid.0);
+                }
+            }
+            if ordering.is_some() {
+                self.ordered_in = true;
+            }
+            return;
+        }
+
+        unsafe {
+            crate::sys::skylight::SLSTransactionMoveWindowWithGroup(
+                transaction,
+                wid.0,
+                self.origin,
+            );
+            crate::sys::skylight::SLSTransactionSetWindowTransform(
+                transaction,
+                wid.0,
+                0,
+                0,
+                transform,
+            );
+            if let Some((level, sub_level)) = ordering {
+                crate::sys::skylight::SLSTransactionSetWindowLevel(transaction, wid.0, level);
+                crate::sys::skylight::SLSTransactionSetWindowSubLevel(
+                    transaction,
+                    wid.0,
+                    sub_level,
+                );
+                crate::sys::skylight::SLSTransactionOrderWindow(
+                    transaction,
+                    wid.0,
+                    BORDER_ORDER_BELOW,
+                    self.target_wid.0,
+                );
+            }
+            crate::sys::skylight::SLSTransactionCommit(transaction, 0);
+            CFRelease(transaction);
+        }
+
+        if ordering.is_some() {
+            self.ordered_in = true;
+        }
     }
 
     fn reshape(&mut self, wid: WindowId, frame: CGRect) {
@@ -505,6 +592,7 @@ impl Border {
                 SLSReleaseWindow(self.cid, wid.0);
             }
         }
+        self.ordered_in = false;
     }
 }
 

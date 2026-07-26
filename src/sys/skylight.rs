@@ -85,6 +85,36 @@ unsafe extern "C" {
     pub fn SLSMoveWindowsToManagedSpace(cid: c_int, window_list: CFArrayRef, sid: u64) -> CGError;
     pub fn SLWindowContextCreate(cid: c_int, wid: u32, options: CFDictionaryRef) -> CGContextRef;
 
+    // Transactions batch window operations into a single atomic commit, so the
+    // compositor never presents a half-applied state (e.g. a new position with
+    // the previous transform).
+    pub fn SLSTransactionCreate(cid: c_int) -> CFTypeRef;
+    pub fn SLSTransactionCommit(transaction: CFTypeRef, synchronous: c_int) -> CGError;
+    pub fn SLSTransactionMoveWindowWithGroup(
+        transaction: CFTypeRef,
+        wid: u32,
+        point: CGPoint,
+    ) -> CGError;
+    pub fn SLSTransactionSetWindowTransform(
+        transaction: CFTypeRef,
+        wid: u32,
+        unused_a: c_int,
+        unused_b: c_int,
+        transform: CGAffineTransform,
+    ) -> CGError;
+    pub fn SLSTransactionSetWindowLevel(transaction: CFTypeRef, wid: u32, level: c_int) -> CGError;
+    pub fn SLSTransactionSetWindowSubLevel(
+        transaction: CFTypeRef,
+        wid: u32,
+        level: c_int,
+    ) -> CGError;
+    pub fn SLSTransactionOrderWindow(
+        transaction: CFTypeRef,
+        wid: u32,
+        order: c_int,
+        rel_wid: u32,
+    ) -> CGError;
+
     pub fn SLSWindowFreezeWithOptions(cid: c_int, wid: u32, options: CFTypeRef) -> CGError;
     pub fn SLSWindowThaw(cid: c_int, wid: u32) -> CGError;
     pub fn SLSCopySpacesForWindows(

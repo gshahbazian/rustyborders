@@ -179,6 +179,10 @@ impl App {
         } else {
             windows::get_front_window(cid)
         };
+        crate::rb_log!(
+            "front window: {front_wid} (ax_focus={})",
+            self.settings.ax_focus
+        );
 
         if !self.focus_window(front_wid) && front_wid.0 != 0 {
             let sid = windows::window_space_id(cid, front_wid);
